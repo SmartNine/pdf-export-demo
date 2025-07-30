@@ -216,34 +216,78 @@ async function importImageToCanvas(file) {
 
   console.log("📸 导入图片到画布");
 
-  const regionBounds = region.getBoundingRect(true);
+  // 获取 UV 区域对象在画布坐标系中的原始 left/top/width/height
+  // Fabric.js 对象的 left/top/width/height 属性是其在“不缩放、不平移”的画布上的逻辑尺寸和位置。
+  // 这些是我们在内部操作对象时应该依赖的值。
+  const regionOriginalLeft = region.left;
+  const regionOriginalTop = region.top;
+  const regionOriginalWidth = region.width * region.scaleX; // 考虑到 region 自身的缩放
+  const regionOriginalHeight = region.height * region.scaleY;
 
+  // 克隆 region 对象作为 clipPath
   const clip = fabric.util.object.clone(region);
+
+  // 💡 关键修改：clipPath 的设置
+  // 当 clipPath 设为 absolutePositioned: true 时，它的 left/top/scaleX/scaleY
+  // 应该直接是它在画布坐标系中的“目标”位置和尺寸。
+  // 它应该和它所裁剪的图片有相同的 left/top/scaleX/scaleY。
+  // 但是，clipPath 的 path 是 uv_region 的 path。
+  // 确保 clipPath 的缩放和位置与 region 的原始逻辑位置和缩放一致。
   clip.set({
-    absolutePositioned: true,
+    absolutePositioned: true, // 保持 absolutePositioned 为 true
+    left: regionOriginalLeft, // clipPath 的左上角应该和 region 的原始左上角对齐
+    top: regionOriginalTop, // clipPath 的左上角应该和 region 的原始左上角对齐
+    scaleX: region.scaleX, // clipPath 的缩放应该和 region 的原始缩放一致
+    scaleY: region.scaleY, // clipPath 的缩放应该和 region 的原始缩放一致
+    angle: region.angle, // 角度保持一致
     inverted: false,
-    left: 0,
-    top: 0,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    path: region.path,
+    path: region.path, // 路径保持不变
+    // 确保 clipPath 的 originX/Y 和被裁剪对象一致，通常默认为 'left', 'top'
+    originX: "left",
+    originY: "top",
   });
 
   const dataUrl = await resizeImage(file, 2048);
 
   return new Promise((resolve) => {
     fabric.Image.fromURL(dataUrl, (img) => {
+      // 💡 图片的定位和缩放策略
+      // 图片的 left/top 应该和 region 的原始 left/top 对齐
+      // 图片的 scale 应该根据 region 的原始尺寸和图片的原始尺寸来计算，以填充或适应 region
       img.set({
-        left: regionBounds.left,
-        top: regionBounds.top,
-        scaleX: 1,
-        scaleY: 1,
+        left: regionOriginalLeft, // 图片的左上角与 region 的原始左上角对齐
+        top: regionOriginalTop, // 图片的左上角与 region 的原始左上角对齐
         selectable: true,
         hasControls: true,
         hasBorders: true,
         clipPath: clip,
+        // 确保图片的 originX/Y 和 clipPath 一致
+        originX: "left",
+        originY: "top",
       });
+
+      // 调整图片的缩放以适应 uv_region 的尺寸
+      // 这里的策略是让图片“覆盖”整个 uv_region 区域，可能会超出，然后由 clipPath 裁剪。
+      if (img.width && img.height) {
+        const scaleX = regionOriginalWidth / img.width;
+        const scaleY = regionOriginalHeight / img.height;
+        const imgScale = Math.max(scaleX, scaleY); // 选择较大的缩放，确保覆盖
+
+        img.set({
+          scaleX: imgScale,
+          scaleY: imgScale,
+        });
+
+        // 居中图片在裁剪区域内（如果图片比裁剪区域大）
+        // 这需要更精确的计算，因为图片可能比裁剪区域大
+        const scaledImgWidth = img.getScaledWidth();
+        const scaledImgHeight = img.getScaledHeight();
+
+        img.set({
+          left: regionOriginalLeft + (regionOriginalWidth - scaledImgWidth) / 2,
+          top: regionOriginalTop + (regionOriginalHeight - scaledImgHeight) / 2,
+        });
+      }
 
       canvas.value.add(img);
       canvas.value.setActiveObject(img);
