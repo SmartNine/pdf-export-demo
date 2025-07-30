@@ -323,23 +323,22 @@ function resizeImage(file, maxSize = 2048) {
 // 🔧 修复导出函数中的视图变换恢复
 async function exportDesign() {
   if (!canvas.value || isLoading.value) return;
-
   isLoading.value = true;
 
   try {
-    // 🔧 备份当前完整的变换状态
+    // 1️⃣ 备份视图状态
     const backupState = {
       zoom: canvas.value.getZoom(),
       viewportTransform: [...canvas.value.viewportTransform],
       originalViewTransform: canvas.value._originalViewTransform,
     };
-
     console.log("💾 备份视图状态:", backupState);
 
-    // 重置到标准状态进行导出
+    // 2️⃣ 重置视图用于导出
     canvas.value.setZoom(1);
     canvas.value.setViewportTransform([1, 0, 0, 1, 0, 0]);
 
+    // 3️⃣ 备份 clipPath 状态（不清零！）
     const processedObjects = [];
     canvas.value.getObjects().forEach((obj) => {
       if (obj.type === "image" && obj.clipPath) {
@@ -352,46 +351,32 @@ async function exportDesign() {
             top: obj.clipPath.top,
             scaleX: obj.clipPath.scaleX,
             scaleY: obj.clipPath.scaleY,
+            angle: obj.clipPath.angle,
+            originX: obj.clipPath.originX,
+            originY: obj.clipPath.originY,
           },
         });
 
-        const imgBounds = obj.getBoundingRect(true);
-        const clipPath = obj.clipPath;
-
-        clipPath.set({
-          absolutePositioned: true,
-          left: 0,
-          top: 0,
-          scaleX: 1,
-          scaleY: 1,
-        });
-
-        obj.set({
-          left: imgBounds.left,
-          top: imgBounds.top,
-        });
+        obj.setCoords(); // 保证 clipPath 区域正确刷新
       }
     });
 
     canvas.value.requestRenderAll();
     const json = canvas.value.toDatalessJSON();
 
-    // 恢复 clipPath 设置
+    // 4️⃣ 恢复 clipPath 和画布状态
     processedObjects.forEach(
       ({ obj, originalClipPath, originalClipSettings }) => {
         originalClipPath.set(originalClipSettings);
       }
     );
 
-    // 🔧 精确恢复视图状态
     canvas.value.setZoom(backupState.zoom);
     canvas.value.setViewportTransform(backupState.viewportTransform);
     canvas.value._originalViewTransform = backupState.originalViewTransform;
     canvas.value.requestRenderAll();
 
-    console.log("🔄 恢复视图状态:", backupState);
-
-    // 创建导出画布
+    // 5️⃣ 创建用于导出的离屏 canvas
     const tempCanvas = document.createElement("canvas");
     const clonedCanvas = new fabric.Canvas(tempCanvas, {
       width: canvas.value.getWidth(),
@@ -401,21 +386,14 @@ async function exportDesign() {
     await new Promise((resolve) => {
       clonedCanvas.loadFromJSON(json, () => {
         clonedCanvas.getObjects().forEach((obj) => {
-          if (obj.type === "image" && obj.clipPath) {
-            obj.clipPath.set({
-              absolutePositioned: true,
-              left: 0,
-              top: 0,
-              scaleX: 1,
-              scaleY: 1,
-            });
-          }
+          obj.setCoords(); // 确保所有对象（尤其 clipPath）坐标计算正确
         });
         clonedCanvas.renderAll();
         resolve();
       });
     });
 
+    // 6️⃣ 导出 SVG
     const finalSVG = clonedCanvas.toSVG({
       suppressPreamble: false,
       viewBox: {
@@ -434,6 +412,7 @@ async function exportDesign() {
 
     clonedCanvas.dispose();
 
+    // 7️⃣ 上传资源
     const formData = new FormData();
     formData.append(
       "design",
@@ -442,15 +421,14 @@ async function exportDesign() {
     );
     formData.append(
       "json",
-      new Blob([JSON.stringify(json, null, 2)], {
-        type: "application/json",
-      }),
+      new Blob([JSON.stringify(json, null, 2)], { type: "application/json" }),
       "data.json"
     );
 
     const images = canvas.value
       .getObjects()
       .filter((obj) => obj.type === "image" && obj._element?.src);
+
     for (let i = 0; i < images.length; i++) {
       const imgObj = images[i];
       const file = await fetch(imgObj._element.src)
@@ -512,47 +490,48 @@ function downloadBlob(blob, filename) {
 // 🔧 修复后的保存本地函数 - 使用相同的精确备份恢复逻辑
 async function saveLocally() {
   if (!canvas.value || isLoading.value) return;
-
   isLoading.value = true;
 
   try {
-    // 🔧 备份当前完整的变换状态
+    // 1️⃣ 备份当前视图状态
     const backupState = {
       zoom: canvas.value.getZoom(),
       viewportTransform: [...canvas.value.viewportTransform],
       originalViewTransform: canvas.value._originalViewTransform,
     };
 
+    // 2️⃣ 重置画布视图用于导出
     canvas.value.setZoom(1);
     canvas.value.setViewportTransform([1, 0, 0, 1, 0, 0]);
 
+    // 3️⃣ 保留 clipPath 原始定位，不再强制设置为 0
     const processedObjects = [];
     canvas.value.getObjects().forEach((obj) => {
       if (obj.type === "image" && obj.clipPath) {
         processedObjects.push({
           obj: obj,
+          originalClipPath: obj.clipPath,
           originalClipSettings: {
             absolutePositioned: obj.clipPath.absolutePositioned,
             left: obj.clipPath.left,
             top: obj.clipPath.top,
             scaleX: obj.clipPath.scaleX,
             scaleY: obj.clipPath.scaleY,
+            angle: obj.clipPath.angle,
+            originX: obj.clipPath.originX,
+            originY: obj.clipPath.originY,
           },
         });
 
-        obj.clipPath.set({
-          absolutePositioned: true,
-          left: 0,
-          top: 0,
-          scaleX: 1,
-          scaleY: 1,
-        });
+        obj.setCoords(); // 强制刷新坐标，防止导出偏移
       }
     });
 
     canvas.value.requestRenderAll();
 
+    // 4️⃣ 导出 JSON 和 SVG
     const json = canvas.value.toDatalessJSON();
+
     const svg = canvas.value.toSVG({
       suppressPreamble: false,
       viewBox: {
@@ -569,16 +548,19 @@ async function saveLocally() {
       },
     });
 
-    processedObjects.forEach(({ obj, originalClipSettings }) => {
-      obj.clipPath.set(originalClipSettings);
-    });
+    // 5️⃣ 恢复 clipPath 和画布状态
+    processedObjects.forEach(
+      ({ obj, originalClipPath, originalClipSettings }) => {
+        originalClipPath.set(originalClipSettings);
+      }
+    );
 
-    // 🔧 精确恢复视图状态
     canvas.value.setZoom(backupState.zoom);
     canvas.value.setViewportTransform(backupState.viewportTransform);
     canvas.value._originalViewTransform = backupState.originalViewTransform;
     canvas.value.requestRenderAll();
 
+    // 6️⃣ 下载本地文件
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), "design.svg");
     downloadBlob(
       new Blob([JSON.stringify(json, null, 2)], { type: "application/json" }),

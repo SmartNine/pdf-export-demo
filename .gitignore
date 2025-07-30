@@ -41,3 +41,9 @@ server/yarn.lock
 *.njsproj
 *.sln
 *.sw?
+
+# 忽略带 UUID 的 export-task 文件夹
+server/exports/export-task-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*/
+
+# 保留 export-task-demo 文件夹
+!server/exports/export-task-demo/
