@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node dependencies
+/client/node_modules
+/server/node_modules
+
+# Production build output
+/client/dist
+/client/dist-ssr
+/server/dist
+/server/dist-ssr
+
+# Lockfiles (可选，看你是否要统一用 lock)
+client/yarn.lock
+server/yarn.lock
+
+# Local env files
+*.local
+.env.local
+.env.*.local
+
+# Cache
+.cache/
+
+# IDEs & editors
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# VS / Windows junk
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
