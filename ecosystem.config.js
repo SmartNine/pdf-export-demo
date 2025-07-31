@@ -1,8 +1,8 @@
 module.exports = {
   apps: [
     {
-      name: 'pdf-export-server',
-      script: './start.js',
+      name: 'pdf-export',
+      script: './server.js',
       cwd: '/var/www/pdf-export/server',
       env: {
         NODE_ENV: 'production',

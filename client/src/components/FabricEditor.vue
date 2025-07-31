@@ -412,7 +412,9 @@ async function exportDesign() {
     });
 
     const text = await res.text();
+    console.log("📥 服务器返回：", text);
     const result = JSON.parse(text);
+    console.log("✅ 返回 JSON 结果：", result);
 
     if (result.success) {
       window.open(getBackendUrl(result.download.pdf), "_blank");

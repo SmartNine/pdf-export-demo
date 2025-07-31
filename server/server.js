@@ -6,7 +6,7 @@ const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
-const PORT = 4000;
+const PORT = 4100;
 
 const exportRouter = require("./routes/export");
 app.use("/api/export", exportRouter);
@@ -14,5 +14,5 @@ app.use("/api/export", exportRouter);
 app.use("/exports", express.static(path.join(__dirname, "exports")));
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`✅ Server is running at http://0.0.0.0:${PORT}`);
 });

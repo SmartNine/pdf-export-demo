@@ -34,6 +34,7 @@ router.post(
   (req, res, next) => {
     const uuid = require("uuid");
     req.taskId = `export-task-${uuid.v4()}`;
+    console.log("📥 收到上传请求，任务ID:", req.taskId);
     next();
   },
   upload.fields([
@@ -51,6 +52,8 @@ router.post(
     const finalPdfPath = path.join(exportDir, "final.pdf");
     const previewPngPath = path.join(exportDir, "preview.png");
 
+    console.log("📂 上传文件信息:", Object.keys(req.files));
+
     // 调用 Inkscape 转换 SVG 为 PDF
     exec(
       `inkscape "${designSvgPath}" --export-type=pdf --export-filename="${finalPdfPath}"`,
@@ -61,6 +64,8 @@ router.post(
             .status(500)
             .json({ success: false, message: "Failed to generate PDF." });
         }
+
+        console.log("✅ Inkscape PDF 转换完成:", finalPdfPath);
 
         // 可选：生成 preview.png（需要 sharp）
         // 已改成前端生成后，上传后端
@@ -79,6 +84,9 @@ router.post(
               console.warn("Ghostscript CMYK 转换失败：", stderr2);
               // 可忽略失败，仍返回原始 PDF
             }
+
+            console.log("✅ Ghostscript CMYK PDF 完成:", cmykPdfPath);
+
             // ✅ 插入 zip 打包逻辑
             const zipPath = path.join(__dirname, "../exports", `${taskId}.zip`);
             const output = fs.createWriteStream(zipPath);
