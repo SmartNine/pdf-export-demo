@@ -4,6 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const { exec } = require("child_process");
 const { v4: uuidv4 } = require("uuid");
+const archiver = require("archiver");
 
 const router = express.Router();
 
@@ -69,16 +70,50 @@ router.post(
           fs.renameSync(previewFile.path, previewTarget);
         }
 
-        res.json({
-          success: true,
-          taskId,
-          download: {
-            pdf: `/exports/${taskId}/final.pdf`,
-            preview: `/exports/${taskId}/preview.png`,
-            svg: `/exports/${taskId}/design.svg`,
-            json: `/exports/${taskId}/data.json`,
-          },
-        });
+        // ✅ CMYK 转换开始
+        const cmykPdfPath = path.join(exportDir, "final-cmyk.pdf");
+        exec(
+          `gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dColorConversionStrategy=/CMYK -dProcessColorModel=/DeviceCMYK -sOutputFile="${cmykPdfPath}" "${finalPdfPath}"`,
+          (error2, stdout2, stderr2) => {
+            if (error2) {
+              console.warn("Ghostscript CMYK 转换失败：", stderr2);
+              // 可忽略失败，仍返回原始 PDF
+            }
+            // ✅ 插入 zip 打包逻辑
+            const zipPath = path.join(__dirname, "../exports", `${taskId}.zip`);
+            const output = fs.createWriteStream(zipPath);
+            const archive = archiver("zip", { zlib: { level: 9 } });
+
+            archive.pipe(output);
+
+            output.on("close", () => {
+              console.log(`✅ Zip 打包完成: ${archive.pointer()} bytes`);
+              res.json({
+                success: true,
+                taskId,
+                download: {
+                  pdf: `/exports/${taskId}/final.pdf`,
+                  cmyk: `/exports/${taskId}/final-cmyk.pdf`,
+                  preview: `/exports/${taskId}/preview.png`,
+                  svg: `/exports/${taskId}/design.svg`,
+                  json: `/exports/${taskId}/data.json`,
+                  zip: `/exports/${taskId}.zip`,
+                },
+              });
+            });
+
+            archive.on("error", (err) => {
+              console.error("❌ Zip 打包失败:", err);
+              res.status(500).json({ success: false, message: "ZIP 打包失败" });
+            });
+
+            archive.directory(
+              path.join(__dirname, "../exports", taskId),
+              `export-task-${taskId}`
+            );
+            archive.finalize();
+          }
+        );
       }
     );
 
