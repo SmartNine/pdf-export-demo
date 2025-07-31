@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Generator: Adobe Illustrator 24.2.1, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
-<svg version="1.1" id="uv_region_3_" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px"
+<svg version="1.1" id="trim_path_3" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px"
 	 y="0px" viewBox="0 0 5487.6 4061.4" style="enable-background:new 0 0 5487.6 4061.4;" xml:space="preserve">
 <style type="text/css">
 	.st0{fill:none;stroke:#000000;stroke-miterlimit:14.3593;}
 </style>
-<polygon id="uv_region_5_" class="st0" points="2744.6,3360.9 45.7,3360.9 45.7,4017.8 5443,4017.8 5443,3360.9 "/>
-<path id="trim_path_4_" class="st0" d="M470.5,2870.8L45.1,3293l5397.4,0.2c-286.8-245.7-972.1-1002-972.1-1002
-	c-189.1-208.9-492.3-557.9-736.1-866c-267.8-338.4-457-627.5-457-627.5L2746.7,48.6l-536.4,749.1l-221,303.6
-	c-385.6,536.3-1120.3,1368-1120.3,1368L470.5,2870.8z"/>
+<path id="uv_region" class="st0" d="M2739.3,3288.1h4.9v5l2698.1,0.1c-286.8-245.7-972.1-1002-972.1-1002
+	c-189.1-208.9-492.3-557.9-736.1-866c-267.8-338.4-457-627.5-457-627.5h-1067l-221,303.6c-385.6,536.3-1120.3,1368-1120.3,1368
+	l-398.6,401.6L44.9,3293l2694.4,0.1V3288.1L2739.3,3288.1z"/>
+<polygon id="uv_region_1" class="st0" points="2744.3,3360.9 2744.3,3364.3 2739.7,3364.3 2739.7,3360.9 45.4,3360.9 
+	45.4,4017.8 5442.7,4017.8 5442.7,3360.9 "/>
+<polygon id="uv_region_2" class="st0" points="3309.1,840.8 2736,44.2 2178.6,840.8 "/>
 </svg>
