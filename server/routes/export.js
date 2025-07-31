@@ -40,6 +40,7 @@ router.post(
     { name: "json", maxCount: 1 },
     { name: "images", maxCount: 10 },
     { name: "fonts", maxCount: 5 },
+    { name: "preview", maxCount: 1 },
   ]),
   (req, res) => {
     const taskId = req.taskId;
@@ -61,7 +62,12 @@ router.post(
         }
 
         // 可选：生成 preview.png（需要 sharp）
-        // 暂略
+        // 已改成前端生成后，上传后端
+        if (req.files["preview"]) {
+          const previewFile = req.files["preview"][0];
+          const previewTarget = path.join(exportDir, "preview.png");
+          fs.renameSync(previewFile.path, previewTarget);
+        }
 
         res.json({
           success: true,
