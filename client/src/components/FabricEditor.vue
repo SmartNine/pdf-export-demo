@@ -47,7 +47,7 @@ import { loadSvgToCanvas } from "../utils/svgLoader";
 const canvas = ref(null);
 const canvasEl = ref(null);
 const selectedRegion = ref("uv_01");
-const regions = ["uv_01", "uv_02"];
+const regions = ["uv_01", "uv_02", "uv_03", "uv_04"];
 const isLoading = ref(false);
 
 const lineVisibility = reactive({

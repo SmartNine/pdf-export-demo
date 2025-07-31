@@ -13,6 +13,6 @@ app.use("/api/export", exportRouter);
 
 app.use("/exports", express.static(path.join(__dirname, "exports")));
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
