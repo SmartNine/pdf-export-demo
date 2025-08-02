@@ -384,7 +384,7 @@ async function exportDesign() {
 
     // 🔧 关键修复：计算实际内容边界
     const contentBounds = getCanvasContentBounds(clonedCanvas);
-    
+
     // 🔧 使用内容边界而不是画布尺寸
     const finalSVG = clonedCanvas.toSVG({
       suppressPreamble: false,
@@ -394,7 +394,7 @@ async function exportDesign() {
         width: contentBounds.width,
         height: contentBounds.height,
       },
-      width: contentBounds.width,  // 🔧 关键：使用内容宽度
+      width: contentBounds.width, // 🔧 关键：使用内容宽度
       height: contentBounds.height, // 🔧 关键：使用内容高度
       reviver: (markup, object) => {
         if (object.clipPath) {
@@ -489,10 +489,10 @@ async function saveLocally() {
     canvas.value.requestRenderAll();
 
     const json = canvas.value.toDatalessJSON();
-    
+
     // 🔧 关键修复：计算实际内容边界
     const contentBounds = getCanvasContentBounds(canvas.value);
-    
+
     const svg = canvas.value.toSVG({
       suppressPreamble: false,
       viewBox: {
@@ -501,7 +501,7 @@ async function saveLocally() {
         width: contentBounds.width,
         height: contentBounds.height,
       },
-      width: contentBounds.width,  // 🔧 关键：使用内容宽度
+      width: contentBounds.width, // 🔧 关键：使用内容宽度
       height: contentBounds.height, // 🔧 关键：使用内容高度
       reviver: (markup, object) => {
         if (object.clipPath) {
@@ -531,51 +531,65 @@ async function saveLocally() {
   }
 }
 
-// 3. 添加新的辅助函数：计算画布内容的实际边界
 function getCanvasContentBounds(canvas) {
-  const objects = canvas.getObjects();
-  if (objects.length === 0) {
-    // 如果没有对象，返回画布尺寸
-    return {
-      left: 0,
-      top: 0,
-      width: canvas.getWidth(),
-      height: canvas.getHeight()
-    };
-  }
-
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-  objects.forEach(obj => {
-    // 🔧 使用 getBoundingRect(false) 获取对象的实际边界，不受视口变换影响
-    const bounds = obj.getBoundingRect(false);
-    
-    minX = Math.min(minX, bounds.left);
-    minY = Math.min(minY, bounds.top);
-    maxX = Math.max(maxX, bounds.left + bounds.width);
-    maxY = Math.max(maxY, bounds.top + bounds.height);
+  // 获取所有可导出对象（排除辅助线、clipPath 等）
+  const objects = canvas.getObjects().filter((obj) => {
+    return (
+      obj.visible !== false &&
+      obj.excludeFromExport !== true &&
+      obj.customType !== "guides" &&
+      obj.type !== "clipPath"
+    );
   });
 
-  // 🔧 确保边界值有效
-  if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
-    console.warn("⚠️ 无效的内容边界，使用画布尺寸");
-    return {
-      left: 0,
-      top: 0,
-      width: canvas.getWidth(),
-      height: canvas.getHeight()
-    };
+  if (objects.length === 0) {
+    return { left: 0, top: 0, width: 100, height: 100 };
   }
 
-  const contentBounds = {
+  // 初始边界
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+
+  objects.forEach((obj) => {
+    let bounds = obj.getBoundingRect(true, true);
+
+    // ✅ 特别处理：如果是图片且带有 clipPath，限制最大边界
+    if (
+      obj.type === "image" &&
+      obj.clipPath &&
+      obj.clipPath.absolutePositioned
+    ) {
+      const clipBounds = obj.clipPath.getBoundingRect(true, true);
+
+      // 限制图片边界为剪裁区域 ±30px（保留一些边缘余量）
+      bounds = {
+        left: clipBounds.left - 30,
+        top: clipBounds.top - 30,
+        width: clipBounds.width + 60,
+        height: clipBounds.height + 60,
+      };
+    }
+
+    const right = bounds.left + bounds.width;
+    const bottom = bounds.top + bounds.height;
+
+    if (bounds.left < minX) minX = bounds.left;
+    if (bounds.top < minY) minY = bounds.top;
+    if (right > maxX) maxX = right;
+    if (bottom > maxY) maxY = bottom;
+  });
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+
+  return {
     left: minX,
     top: minY,
-    width: maxX - minX,
-    height: maxY - minY
+    width,
+    height,
   };
-
-  console.log("📐 计算的内容边界:", contentBounds);
-  return contentBounds;
 }
 
 function prepareExportObjects(canvas) {
@@ -638,14 +652,14 @@ function fixClipPathInSVGMarkup(markup, object) {
 
   // 🔧 移除 clipPath 中错误的 transform 属性
   fixedMarkup = fixedMarkup.replace(clipPathRegex, (match) => {
-    return match.replace(/transform="[^"]*"/g, '');
+    return match.replace(/transform="[^"]*"/g, "");
   });
 
   // 🔧 确保 clipPath 内部的路径也没有错误的 transform
   const clipPathContentRegex = /<clipPath[^>]*>(.*?)<\/clipPath>/gs;
   fixedMarkup = fixedMarkup.replace(clipPathContentRegex, (match, content) => {
     // 移除 clipPath 内部路径的 transform 属性
-    const fixedContent = content.replace(/transform="[^"]*"/g, '');
+    const fixedContent = content.replace(/transform="[^"]*"/g, "");
     return match.replace(content, fixedContent);
   });
 
@@ -655,33 +669,33 @@ function fixClipPathInSVGMarkup(markup, object) {
 // 5. 添加调试函数（可选）
 function debugContentBounds() {
   if (!canvas.value) return;
-  
+
   const bounds = getCanvasContentBounds(canvas.value);
   console.log("🔍 当前内容边界:", bounds);
-  
+
   const canvasSize = {
     width: canvas.value.getWidth(),
-    height: canvas.value.getHeight()
+    height: canvas.value.getHeight(),
   };
   console.log("🔍 画布尺寸:", canvasSize);
-  
+
   // 在画布上可视化边界框（调试用）
   const rect = new fabric.Rect({
     left: bounds.left,
     top: bounds.top,
     width: bounds.width,
     height: bounds.height,
-    fill: 'transparent',
-    stroke: 'red',
+    fill: "transparent",
+    stroke: "red",
     strokeWidth: 2,
     strokeDashArray: [10, 5],
     selectable: false,
-    evented: false
+    evented: false,
   });
-  
+
   canvas.value.add(rect);
   canvas.value.renderAll();
-  
+
   // 3秒后移除边界框
   setTimeout(() => {
     canvas.value.remove(rect);

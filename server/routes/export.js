@@ -82,13 +82,12 @@ router.post(
         exec(
           `gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dColorConversionStrategy=/CMYK -dProcessColorModel=/DeviceCMYK -sOutputFile="${cmykPdfPath}" "${finalPdfPath}"`,
           (error2, stdout2, stderr2) => {
+            const usedCMYK = !error2;
             if (error2) {
               console.warn("Ghostscript CMYK 转换失败：", stderr2);
-              usedCMYK = false;
-              // 可忽略失败，仍返回原始 PDF
+            } else {
+              console.log("✅ Ghostscript CMYK PDF 完成:", cmykPdfPath);
             }
-
-            console.log("✅ Ghostscript CMYK PDF 完成:", cmykPdfPath);
 
             // ✅ 插入 zip 打包逻辑
             const zipPath = path.join(__dirname, "../exports", `${taskId}.zip`);

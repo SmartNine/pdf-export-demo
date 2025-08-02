@@ -50,6 +50,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [8, 4],
                 customType: "bleed",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             } else if (id.includes("safe")) {
               obj.set({
@@ -57,12 +58,14 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [5, 5],
                 customType: "safe",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             } else if (id.includes("trim")) {
               obj.set({
                 stroke: "gray",
                 customType: "trim",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             } else if (id.includes("fold")) {
               obj.set({
@@ -70,6 +73,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [4, 4],
                 customType: "fold",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             }
 
