@@ -320,6 +320,28 @@ function resizeImage(file, maxSize = 2048) {
   });
 }
 
+function addSizedSVGAttributes(svgText, width, height) {
+  // 提取原始 <svg ...> 标签
+  const svgTagMatch = svgText.match(/<svg[^>]*>/);
+  if (!svgTagMatch) return svgText;
+
+  // 清除 width / height / viewBox / xmlns 属性（无论顺序、缩进）
+  const cleanedTag = svgTagMatch[0]
+    .replace(/\swidth="[^"]*"/gi, "")
+    .replace(/\sheight="[^"]*"/gi, "")
+    .replace(/\sviewBox="[^"]*"/gi, "")
+    .replace(/\sxmlns="[^"]*"/gi, "");
+
+  // 注入干净的新属性
+  const replacedTag = cleanedTag.replace(
+    /^<svg/,
+    `<svg width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg"`
+  );
+
+  // 替换整个 <svg ...> 标签
+  return svgText.replace(svgTagMatch[0], replacedTag);
+}
+
 async function exportDesign() {
   if (!canvas.value || isLoading.value) return;
   isLoading.value = true;
@@ -376,12 +398,19 @@ async function exportDesign() {
       },
     });
 
+    // ✅ 加入 mm 单位
+    const finalSVGWithSize = addSizedSVGAttributes(
+      finalSVG,
+      clonedCanvas.getWidth(),
+      clonedCanvas.getHeight()
+    );
+
     clonedCanvas.dispose();
 
     const formData = new FormData();
     formData.append(
       "design",
-      new Blob([finalSVG], { type: "image/svg+xml" }),
+      new Blob([finalSVGWithSize], { type: "image/svg+xml" }),
       "design.svg"
     );
     formData.append(
@@ -417,6 +446,11 @@ async function exportDesign() {
     console.log("✅ 返回 JSON 结果：", result);
 
     if (result.success) {
+      if (!result.usedCMYK) {
+        alert(
+          "⚠️ 当前导出为 RGB 模式，未成功转换为 CMYK。请联系管理员或重试。"
+        );
+      }
       window.open(getBackendUrl(result.download.pdf), "_blank");
     } else {
       alert("导出失败，请检查服务器日志");

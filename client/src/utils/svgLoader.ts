@@ -107,6 +107,36 @@ export async function loadSvgToCanvas(canvas, url, tag) {
 
         // 🔧 批量添加对象到画布
         try {
+          // ✅ 添加：自动设置 canvas 尺寸和缩放比例
+          const viewBoxAttr = options && options.viewBox;
+          if (viewBoxAttr) {
+            const [, , viewBoxWidth, viewBoxHeight] = viewBoxAttr
+              .split(/\s+/)
+              .map(Number);
+
+            if (viewBoxWidth && viewBoxHeight) {
+              // 设置逻辑尺寸为 SVG 原始尺寸
+              canvas.setWidth(viewBoxWidth);
+              canvas.setHeight(viewBoxHeight);
+
+              // 设置显示缩放（适配最大宽/高为 800）
+              const maxSize = 800;
+              const scale = Math.min(
+                maxSize / viewBoxWidth,
+                maxSize / viewBoxHeight
+              );
+
+              // 设置缩放和居中偏移
+              const dx = (maxSize - viewBoxWidth * scale) / 2;
+              const dy = (maxSize - viewBoxHeight * scale) / 2;
+              canvas.setViewportTransform([scale, 0, 0, scale, dx, dy]);
+
+              console.log(
+                `🎯 已设置画布大小: ${viewBoxWidth}x${viewBoxHeight}，缩放: ${scale}`
+              );
+            }
+          }
+
           processedObjects.forEach((obj) => {
             canvas.add(obj);
           });

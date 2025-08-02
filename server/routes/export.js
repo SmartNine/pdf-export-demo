@@ -56,7 +56,7 @@ router.post(
 
     // 调用 Inkscape 转换 SVG 为 PDF
     exec(
-      `inkscape "${designSvgPath}" --export-type=pdf --export-filename="${finalPdfPath}"`,
+      `inkscape "${designSvgPath}" --export-type=pdf --export-filename="${finalPdfPath} --export-area-drawing"`,
       (error, stdout, stderr) => {
         if (error) {
           console.error("Inkscape error:", stderr);
@@ -75,6 +75,8 @@ router.post(
           fs.renameSync(previewFile.path, previewTarget);
         }
 
+        let usedCMYK = true;
+
         // ✅ CMYK 转换开始
         const cmykPdfPath = path.join(exportDir, "final-cmyk.pdf");
         exec(
@@ -82,6 +84,7 @@ router.post(
           (error2, stdout2, stderr2) => {
             if (error2) {
               console.warn("Ghostscript CMYK 转换失败：", stderr2);
+              usedCMYK = false;
               // 可忽略失败，仍返回原始 PDF
             }
 
@@ -99,6 +102,7 @@ router.post(
               res.json({
                 success: true,
                 taskId,
+                usedCMYK,
                 download: {
                   pdf: `/exports/${taskId}/final.pdf`,
                   cmyk: `/exports/${taskId}/final-cmyk.pdf`,
