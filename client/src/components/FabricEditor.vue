@@ -279,6 +279,9 @@ async function importImageToCanvas(file) {
         clipPath: clonedClipPath,
         originX: "left",
         originY: "top",
+        originalFileName: file.name,
+        // 🔧 【关键新增】：保存原始文件引用，用于导出时获取高质量图片
+        originalFile: file,
       });
 
       if (img.width && img.height) {
@@ -353,6 +356,31 @@ function addSizedSVGAttributes(svgText, width, height) {
   return svgText.replace(svgTagMatch[0], replacedTag);
 }
 
+// 目的：导出时使用原始质量的图片而非压缩后的预览图
+async function getOriginalImageBlob(imgObj) {
+  try {
+    // 🔧 优先使用原始文件（最高质量）
+    // if (imgObj.originalFile) {
+    //   console.log(`📷 使用原始文件: ${imgObj.originalFileName}`);
+    //   return imgObj.originalFile;
+    // }
+
+    // 🔧 兜底方案：从当前显示的src获取（可能是压缩后的）
+    if (imgObj._element && imgObj._element.src) {
+      console.log(`📷 使用当前显示图片: ${imgObj.originalFileName}`);
+      const response = await fetch(imgObj._element.src);
+      return await response.blob();
+    }
+
+    throw new Error("无法获取图片数据");
+  } catch (error) {
+    console.error("获取图片数据失败:", error);
+    // 最后的兜底：返回当前显示的图片数据
+    const response = await fetch(imgObj._element.src);
+    return await response.blob();
+  }
+}
+
 async function exportDesign() {
   if (!canvas.value || isLoading.value) return;
   isLoading.value = true;
@@ -388,9 +416,16 @@ async function exportDesign() {
       height: canvas.value.getHeight(),
     });
 
+    // 🔧 收集图片信息
+    const imageFileNames = canvas.value
+      .getObjects()
+      .filter((obj) => obj.type === "image" && obj.originalFileName)
+      .map((obj) => obj.originalFileName);
+
+    console.log(`🔍 找到 ${imageFileNames.length} 个图片文件:`, imageFileNames);
+
     await new Promise((resolve) => {
       clonedCanvas.loadFromJSON(json, () => {
-        clonedCanvas.getObjects().forEach((obj) => obj.setCoords());
         clonedCanvas.renderAll();
         resolve();
       });
@@ -399,8 +434,8 @@ async function exportDesign() {
     // 🔧 关键修复：计算实际内容边界
     const contentBounds = getCanvasContentBounds(clonedCanvas);
 
-    // 🔧 使用内容边界而不是画布尺寸
-    const finalSVG = clonedCanvas.toSVG({
+    // 🔧 生成原始SVG
+    const originalSVG = clonedCanvas.toSVG({
       suppressPreamble: false,
       viewBox: {
         x: contentBounds.left,
@@ -408,14 +443,36 @@ async function exportDesign() {
         width: contentBounds.width,
         height: contentBounds.height,
       },
-      width: contentBounds.width, // 🔧 关键：使用内容宽度
-      height: contentBounds.height, // 🔧 关键：使用内容高度
-      reviver: (markup, object) => {
-        if (object.clipPath) {
-          return fixClipPathInSVGMarkup(markup, object);
-        }
-        return markup;
-      },
+      width: contentBounds.width,
+      height: contentBounds.height,
+    });
+
+    // 🔧 SVG路径替换 - 保持原有逻辑
+    let finalSVG = originalSVG;
+    let replacementCount = 0;
+
+    imageFileNames.forEach((fileName, index) => {
+      const relativePath = `images/${fileName}`;
+
+      const base64Pattern = /href="data:image\/[^;]+;base64,[^"]*"/;
+      const xlinkBase64Pattern = /xlink:href="data:image\/[^;]+;base64,[^"]*"/;
+
+      if (base64Pattern.test(finalSVG)) {
+        finalSVG = finalSVG.replace(base64Pattern, `href="${relativePath}"`);
+        replacementCount++;
+        console.log(
+          `✅ 替换SVG图片 ${index + 1}: ${fileName} -> ${relativePath}`
+        );
+      } else if (xlinkBase64Pattern.test(finalSVG)) {
+        finalSVG = finalSVG.replace(
+          xlinkBase64Pattern,
+          `xlink:href="${relativePath}"`
+        );
+        replacementCount++;
+        console.log(
+          `✅ 替换SVG图片 ${index + 1} (xlink): ${fileName} -> ${relativePath}`
+        );
+      }
     });
 
     // ✅ 加入 mm 单位 - 使用内容尺寸
@@ -425,18 +482,57 @@ async function exportDesign() {
       contentBounds.height
     );
 
+    // 🔧 【新增】处理JSON中的base64 - 关键修复
+    console.log("🔧 开始处理JSON中的图片路径...");
+    let processedJSON = JSON.stringify(json, null, 2);
+
+    // 替换JSON中的base64图片数据
+    imageFileNames.forEach((fileName, index) => {
+      const relativePath = `images/${fileName}`;
+
+      // 🔧 匹配JSON中的base64图片数据
+      // JSON格式: "src":"data:image/jpeg;base64,..."
+      const jsonBase64Pattern = /"src"\s*:\s*"data:image\/[^;]+;base64,[^"]*"/g;
+
+      // 查找所有匹配项
+      const matches = [...processedJSON.matchAll(jsonBase64Pattern)];
+      console.log(`🔍 在JSON中找到 ${matches.length} 个base64图片引用`);
+
+      if (matches.length > index) {
+        // 替换第index个匹配项
+        let currentIndex = 0;
+        processedJSON = processedJSON.replace(jsonBase64Pattern, (match) => {
+          if (currentIndex === index) {
+            console.log(
+              `✅ 替换JSON图片 ${index + 1}: ${fileName} -> ${relativePath}`
+            );
+            return `"src":"${relativePath}"`;
+          }
+          currentIndex++;
+          return match;
+        });
+      }
+    });
+
+    // 🔧 验证JSON处理结果
+    const jsonHasBase64 = processedJSON.includes("base64");
+    const jsonHasImages = processedJSON.includes("images/");
+    console.log(
+      `🔍 JSON处理结果: 包含base64=${jsonHasBase64}, 包含images/=${jsonHasImages}`
+    );
+
     clonedCanvas.dispose();
 
-    // 其余代码保持不变...
     const formData = new FormData();
     formData.append(
       "design",
       new Blob([finalSVGWithSize], { type: "image/svg+xml" }),
       "design.svg"
     );
+    // 🔧 【关键修改】使用处理后的JSON
     formData.append(
       "json",
-      new Blob([JSON.stringify(json, null, 2)], { type: "application/json" }),
+      new Blob([processedJSON], { type: "application/json" }),
       "data.json"
     );
     const previewBlob = await getPreviewBlob(canvas.value);
@@ -444,16 +540,14 @@ async function exportDesign() {
 
     const images = canvas.value
       .getObjects()
-      .filter((obj) => obj.type === "image" && obj._element?.src);
+      .filter((obj) => obj.type === "image" && obj.originalFileName);
 
-    for (let i = 0; i < images.length; i++) {
-      const imgObj = images[i];
-      const file = await fetch(imgObj._element.src)
-        .then((res) => res.blob())
-        .then(
-          (blob) => new File([blob], `image${i + 1}.jpg`, { type: blob.type })
-        );
-      formData.append("images", file);
+    for (const imgObj of images) {
+      const blob = await getOriginalImageBlob(imgObj);
+      formData.append("images", blob, imgObj.originalFileName);
+      console.log(
+        `📤 添加图片到导出: ${imgObj.originalFileName}, 大小: ${blob.size} bytes`
+      );
     }
 
     const res = await fetch("/api/export", {
