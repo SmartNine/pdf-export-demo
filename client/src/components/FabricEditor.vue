@@ -29,11 +29,13 @@
       accept="image/*"
       @change="onImageUpload"
       :disabled="isLoading"
+      ref="fileInputRef"
     />
     <button @click="exportDesign" :disabled="isLoading">导出 PDF</button>
-    <button @click="saveLocally" :disabled="isLoading">保存本地</button>
-    <button @click="debugClipPaths" :disabled="isLoading">调试 ClipPath</button>
-    <button @click="resetViewTransform" :disabled="isLoading">重置视图</button>
+    <button @click="downloadZip" :disabled="!zipDownloadUrl">下载 ZIP</button>
+    <button v-if="isDev" @click="saveLocally" :disabled="isLoading">
+      保存本地
+    </button>
 
     <canvas ref="canvasEl" width="800" height="800"></canvas>
   </div>
@@ -44,11 +46,16 @@ import { ref, reactive, onMounted, nextTick } from "vue";
 import { fabric } from "fabric";
 import { loadSvgToCanvas } from "../utils/svgLoader";
 
+// 🔧 添加一个变量来存储开发模式状态
+const isDev = import.meta.env.DEV;
+
 const canvas = ref(null);
 const canvasEl = ref(null);
+const fileInputRef = ref(null); // 🔧 新增：文件输入框的引用
 const selectedRegion = ref("uv_01");
 const regions = ["uv_01", "uv_02", "uv_03", "uv_04", "uv_05"];
 const isLoading = ref(false);
+const zipDownloadUrl = ref(null);
 
 const lineVisibility = reactive({
   bleed: true,
@@ -60,6 +67,12 @@ const lineVisibility = reactive({
 // 🔧 添加初始化状态追踪
 const canvasReady = ref(false);
 const loadingQueue = ref([]);
+
+function resetFileInput() {
+  if (fileInputRef.value) {
+    fileInputRef.value.value = ""; // 清空文件输入框的值
+  }
+}
 
 async function loadDesign(region) {
   try {
@@ -132,6 +145,8 @@ async function switchRegion() {
 
     // 🔧 完全重置画布状态
     resetCanvasToInitialState();
+    resetFileInput(); // 💡 关键修改：重置文件输入框
+    zipDownloadUrl.value = null; // 💡 关键修改：重置 ZIP 下载链接状态
 
     // 🔧 等待DOM更新
     await nextTick();
@@ -206,43 +221,47 @@ function toggleLine(type) {
 async function importImageToCanvas(file) {
   if (!canvas.value || isLoading.value) return;
 
-  const region = canvas.value
+  const clip = canvas.value
     .getObjects()
-    .find((obj) => obj.id?.startsWith("uv_region"));
-  if (!region) {
-    console.error("❌ 未找到 uv_region");
+    .find((obj) => obj.customType === "uv_clipPath");
+
+  const uvRawObjects = canvas.value
+    .getObjects()
+    .filter((obj) => obj.customType === "uv_raw");
+
+  if (!clip || uvRawObjects.length === 0) {
+    console.error("❌ 未找到合并的 UV 剪切路径或原始 UV 区域");
     return;
   }
 
+  const combinedBounds = uvRawObjects.reduce(
+    (acc, obj) => {
+      const bounds = obj.getBoundingRect(true, true);
+      acc.left = Math.min(acc.left, bounds.left);
+      acc.top = Math.min(acc.top, bounds.top);
+      acc.right = Math.max(acc.right, bounds.left + bounds.width);
+      acc.bottom = Math.max(acc.bottom, bounds.top + bounds.height);
+      return acc;
+    },
+    { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }
+  );
+
+  const regionOriginalLeft = combinedBounds.left;
+  const regionOriginalTop = combinedBounds.top;
+  const regionOriginalWidth = combinedBounds.right - combinedBounds.left;
+  const regionOriginalHeight = combinedBounds.bottom - combinedBounds.top;
+
   console.log("📸 导入图片到画布");
 
-  // 获取 UV 区域对象在画布坐标系中的原始 left/top/width/height
-  // Fabric.js 对象的 left/top/width/height 属性是其在“不缩放、不平移”的画布上的逻辑尺寸和位置。
-  // 这些是我们在内部操作对象时应该依赖的值。
-  const regionOriginalLeft = region.left;
-  const regionOriginalTop = region.top;
-  const regionOriginalWidth = region.width * region.scaleX; // 考虑到 region 自身的缩放
-  const regionOriginalHeight = region.height * region.scaleY;
+  const clonedClipPath = fabric.util.object.clone(clip);
 
-  // 克隆 region 对象作为 clipPath
-  const clip = fabric.util.object.clone(region);
-
-  // 💡 关键修改：clipPath 的设置
-  // 当 clipPath 设为 absolutePositioned: true 时，它的 left/top/scaleX/scaleY
-  // 应该直接是它在画布坐标系中的“目标”位置和尺寸。
-  // 它应该和它所裁剪的图片有相同的 left/top/scaleX/scaleY。
-  // 但是，clipPath 的 path 是 uv_region 的 path。
-  // 确保 clipPath 的缩放和位置与 region 的原始逻辑位置和缩放一致。
-  clip.set({
-    absolutePositioned: true, // 保持 absolutePositioned 为 true
-    left: regionOriginalLeft, // clipPath 的左上角应该和 region 的原始左上角对齐
-    top: regionOriginalTop, // clipPath 的左上角应该和 region 的原始左上角对齐
-    scaleX: region.scaleX, // clipPath 的缩放应该和 region 的原始缩放一致
-    scaleY: region.scaleY, // clipPath 的缩放应该和 region 的原始缩放一致
-    angle: region.angle, // 角度保持一致
-    inverted: false,
-    path: region.path, // 路径保持不变
-    // 确保 clipPath 的 originX/Y 和被裁剪对象一致，通常默认为 'left', 'top'
+  clonedClipPath.set({
+    absolutePositioned: true,
+    left: regionOriginalLeft,
+    top: regionOriginalTop,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
     originX: "left",
     originY: "top",
   });
@@ -251,35 +270,27 @@ async function importImageToCanvas(file) {
 
   return new Promise((resolve) => {
     fabric.Image.fromURL(dataUrl, (img) => {
-      // 💡 图片的定位和缩放策略
-      // 图片的 left/top 应该和 region 的原始 left/top 对齐
-      // 图片的 scale 应该根据 region 的原始尺寸和图片的原始尺寸来计算，以填充或适应 region
       img.set({
-        left: regionOriginalLeft, // 图片的左上角与 region 的原始左上角对齐
-        top: regionOriginalTop, // 图片的左上角与 region 的原始左上角对齐
+        left: regionOriginalLeft,
+        top: regionOriginalTop,
         selectable: true,
         hasControls: true,
         hasBorders: true,
-        clipPath: clip,
-        // 确保图片的 originX/Y 和 clipPath 一致
+        clipPath: clonedClipPath,
         originX: "left",
         originY: "top",
       });
 
-      // 调整图片的缩放以适应 uv_region 的尺寸
-      // 这里的策略是让图片“覆盖”整个 uv_region 区域，可能会超出，然后由 clipPath 裁剪。
       if (img.width && img.height) {
         const scaleX = regionOriginalWidth / img.width;
         const scaleY = regionOriginalHeight / img.height;
-        const imgScale = Math.max(scaleX, scaleY); // 选择较大的缩放，确保覆盖
+        const imgScale = Math.max(scaleX, scaleY);
 
         img.set({
           scaleX: imgScale,
           scaleY: imgScale,
         });
 
-        // 居中图片在裁剪区域内（如果图片比裁剪区域大）
-        // 这需要更精确的计算，因为图片可能比裁剪区域大
         const scaledImgWidth = img.getScaledWidth();
         const scaledImgHeight = img.getScaledHeight();
 
@@ -345,6 +356,9 @@ function addSizedSVGAttributes(svgText, width, height) {
 async function exportDesign() {
   if (!canvas.value || isLoading.value) return;
   isLoading.value = true;
+
+  // 🔧 重置下载链接，避免在新的导出开始时显示旧的链接
+  zipDownloadUrl.value = null;
 
   try {
     const backupState = {
@@ -458,6 +472,9 @@ async function exportDesign() {
           "⚠️ 当前导出为 RGB 模式，未成功转换为 CMYK。请联系管理员或重试。"
         );
       }
+      // 🔧 存储 ZIP 下载链接
+      zipDownloadUrl.value = getBackendUrl(result.download.zip);
+
       window.open(getBackendUrl(result.download.pdf), "_blank");
     } else {
       alert("导出失败，请检查服务器日志");
@@ -467,6 +484,13 @@ async function exportDesign() {
     alert("导出失败！");
   } finally {
     isLoading.value = false;
+  }
+}
+
+// 🔧 新增：下载 ZIP 文件的函数
+function downloadZip() {
+  if (zipDownloadUrl.value) {
+    window.open(zipDownloadUrl.value, "_blank");
   }
 }
 
@@ -710,56 +734,6 @@ function downloadBlob(blob, filename) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
-}
-
-function debugClipPaths() {
-  if (!canvas.value) return;
-
-  console.log("=== ClipPath Debug Info ===");
-  canvas.value.getObjects().forEach((obj, index) => {
-    if (obj.type === "image" && obj.clipPath) {
-      const objBounds = obj.getBoundingRect(true);
-      const clipBounds = obj.clipPath.getBoundingRect();
-
-      console.log(`Image ${index}:`, {
-        image: {
-          left: obj.left,
-          top: obj.top,
-          width: obj.width,
-          height: obj.height,
-          scaleX: obj.scaleX,
-          scaleY: obj.scaleY,
-          bounds: objBounds,
-        },
-        clipPath: {
-          left: obj.clipPath.left,
-          top: obj.clipPath.top,
-          width: obj.clipPath.width,
-          height: obj.clipPath.height,
-          scaleX: obj.clipPath.scaleX,
-          scaleY: obj.clipPath.scaleY,
-          absolutePositioned: obj.clipPath.absolutePositioned,
-          bounds: clipBounds,
-        },
-      });
-    }
-  });
-}
-
-// 🔧 添加手动重置视图的调试功能
-function resetViewTransform() {
-  if (!canvas.value) return;
-
-  resetCanvasToInitialState();
-
-  // 重新应用最后保存的视图变换
-  if (canvas.value._originalViewTransform) {
-    const vpt = canvas.value._originalViewTransform.viewportTransform;
-    if (vpt) {
-      canvas.value.setViewportTransform([...vpt]);
-      canvas.value.requestRenderAll();
-    }
-  }
 }
 
 // 🔧 处理延迟的加载队列

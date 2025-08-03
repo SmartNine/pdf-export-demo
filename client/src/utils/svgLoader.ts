@@ -25,6 +25,8 @@ export async function loadSvgToCanvas(canvas, url, tag) {
 
         // 🔧 处理每个对象
         const processedObjects = [];
+        const uvPathData = []; // 用于存储所有 UV 区域的路径数据
+        const uvObjects = []; // 用于存储原始 UV 区域对象
 
         objects.forEach((obj, index) => {
           try {
@@ -38,7 +40,6 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               exportable: false,
               tag,
               id: id,
-              // 🔧 确保对象可见
               visible: true,
               opacity: obj.opacity || 1,
             });
@@ -77,27 +78,82 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               });
             }
 
-            // 🔧 UV区域特殊处理
-            if (tag === "uv") {
-              if (id && id.startsWith("uv_region")) {
-                obj.set({
-                  fill: "#f8f8f8",
-                  stroke: "#888",
-                  strokeWidth: 1,
-                  opacity: 1,
-                  preserveOriginalPath: true,
-                });
-                console.log(`🎯 找到UV区域: ${id}`);
-              } else {
-                obj.set({
-                  stroke: "#888",
-                  strokeWidth: 0.5,
-                  opacity: 0.2,
-                });
+            // 🔧 UV区域特殊处理 - 核心修改部分
+            if (tag === "uv" && id && id.startsWith("uv_region")) {
+              let pathData = null;
+
+              switch (obj.type) {
+                case "path":
+                  if (obj.path) {
+                    pathData = obj.path
+                      .map((segment) => segment.join(" "))
+                      .join(" ");
+                  }
+                  break;
+                case "polygon":
+                  if (obj.points) {
+                    pathData = `M ${obj.points
+                      .map((p) => `${p.x} ${p.y}`)
+                      .join(" L ")} Z`;
+                  }
+                  break;
+                case "rect":
+                  const { left, top, width, height } = obj;
+                  console.log(
+                    `✅ rect属性: left=${left}, top=${top}, width=${width}, height=${height}`
+                  );
+                  pathData = `M ${left} ${top} L ${left + width} ${top} L ${
+                    left + width
+                  } ${top + height} L ${left} ${top + height} Z`;
+                  console.log(
+                    `✅ 从rect提取路径数据: ${pathData.substring(0, 50)}...`
+                  );
+                  break;
+                case "circle":
+                  // 新增：处理 circle 对象
+                  const { left: circleLeft, top: circleTop, radius } = obj;
+                  const cx = circleLeft + radius;
+                  const cy = circleTop + radius;
+                  pathData = `M ${cx},${cy} m ${-radius}, 0 a ${radius},${radius} 0 1,0 ${
+                    radius * 2
+                  },0 a ${radius},${radius} 0 1,0 ${-radius * 2},0`;
+                  break;
+                default:
+                  console.warn(
+                    `⚠️ 发现未处理的UV区域对象类型: ${obj.type} (id: ${id})`
+                  );
+                  break;
               }
+
+              if (pathData) {
+                uvPathData.push(pathData);
+              }
+
+              // 将原始 UV 区域对象设置为不可见、不可选中
+              obj.set({
+                fill: "transparent",
+                stroke: "transparent", // 隐藏线条
+                strokeWidth: 0,
+                opacity: 0,
+                visible: false,
+                selectable: false,
+                evented: false,
+                excludeFromExport: true,
+                customType: "uv_raw", // 标记为原始 UV 对象，用于计算边界
+              });
+              uvObjects.push(obj);
+            } else if (tag === "uv") {
+              // 其他 uv 文件中的非 uv_region 对象，例如辅助线
+              obj.set({
+                stroke: "#888",
+                strokeWidth: 0.5,
+                opacity: 0.2,
+                customType: "uv_guide",
+                excludeFromExport: true,
+              });
             }
 
-            // 🔧 确保路径对象的完整性
+            // 确保路径对象的完整性
             if (obj.type === "path" && obj.path) {
               obj._setPath(obj.path);
             }
@@ -109,9 +165,27 @@ export async function loadSvgToCanvas(canvas, url, tag) {
           }
         });
 
+        // 🔧 新增：在所有对象处理完成后，创建合并的 clipPath
+        if (uvPathData.length > 0) {
+          const mergedPathData = uvPathData.join(" "); // 将所有路径数据合并
+          const uvClipPath = new fabric.Path(mergedPathData, {
+            absolutePositioned: true,
+            visible: true,
+            selectable: false,
+            evented: false,
+            fill: "#f8f8f8",
+            stroke: "#888",
+            strokeWidth: 1,
+            opacity: 1,
+            customType: "uv_clipPath", // 标记为剪切路径
+            id: "merged_uv_clipPath",
+          });
+          processedObjects.push(uvClipPath);
+          console.log(`✅ 已创建合并的UV剪切路径`);
+        }
+
         // 🔧 批量添加对象到画布
         try {
-          // ✅ 添加：自动设置 canvas 尺寸和缩放比例
           const viewBoxAttr = options && options.viewBox;
           if (viewBoxAttr) {
             const [, , viewBoxWidth, viewBoxHeight] = viewBoxAttr
@@ -119,18 +193,15 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               .map(Number);
 
             if (viewBoxWidth && viewBoxHeight) {
-              // 设置逻辑尺寸为 SVG 原始尺寸
               canvas.setWidth(viewBoxWidth);
               canvas.setHeight(viewBoxHeight);
 
-              // 设置显示缩放（适配最大宽/高为 800）
               const maxSize = 800;
               const scale = Math.min(
                 maxSize / viewBoxWidth,
                 maxSize / viewBoxHeight
               );
 
-              // 设置缩放和居中偏移
               const dx = (maxSize - viewBoxWidth * scale) / 2;
               const dy = (maxSize - viewBoxHeight * scale) / 2;
               canvas.setViewportTransform([scale, 0, 0, scale, dx, dy]);
@@ -145,12 +216,10 @@ export async function loadSvgToCanvas(canvas, url, tag) {
             canvas.add(obj);
           });
 
-          // 🔧 强制渲染一次
           canvas.requestRenderAll();
 
           console.log(`✅ 已添加 ${processedObjects.length} 个对象到画布`);
 
-          // 🔧 计算和应用视图变换
           if (processedObjects.length > 0) {
             setTimeout(() => {
               try {
@@ -158,9 +227,9 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 resolve();
               } catch (error) {
                 console.error("❌ 应用视图变换失败:", error);
-                resolve(); // 即使失败也要resolve，避免阻塞
+                resolve();
               }
-            }, 100); // 给渲染一些时间
+            }, 100);
           } else {
             resolve();
           }
@@ -170,9 +239,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
         }
       },
       (item, object) => {
-        // 🔧 SVG解析回调 - 确保每个对象都被正确处理
         if (object && object.type === "path") {
-          // 确保路径数据完整
           object._setPath && object._setPath(object.path);
         }
         return object;
