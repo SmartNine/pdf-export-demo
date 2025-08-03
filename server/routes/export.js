@@ -56,7 +56,7 @@ router.post(
 
     // 调用 Inkscape 转换 SVG 为 PDF
     exec(
-      `inkscape "${designSvgPath}" --export-type=pdf --export-filename="${finalPdfPath} --export-area-drawing"`,
+      `inkscape "${designSvgPath}" --export-type=pdf --export-filename="${finalPdfPath}" --export-area-drawing`,
       (error, stdout, stderr) => {
         if (error) {
           console.error("Inkscape error:", stderr);
