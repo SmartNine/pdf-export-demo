@@ -134,6 +134,25 @@ router.post(
       const jsonTarget = path.join(exportDir, "data.json");
       fs.renameSync(jsonFile.path, jsonTarget);
     }
+
+    if (req.body.fontsUsed) {
+      const fontsUsed = JSON.parse(req.body.fontsUsed);
+      const fontsSourceDir = path.join(__dirname, "../public/fonts");
+      const fontsTargetDir = path.join(exportDir, "fonts");
+      fs.mkdirSync(fontsTargetDir, { recursive: true });
+
+      fontsUsed.forEach(fontName => {
+        const fontFiles = fs.readdirSync(fontsSourceDir).filter(f =>
+          f.startsWith(fontName)
+        );
+        fontFiles.forEach(fontFile => {
+          const src = path.join(fontsSourceDir, fontFile);
+          const dest = path.join(fontsTargetDir, fontFile);
+          fs.copyFileSync(src, dest);
+          console.log(`✅ 拷贝字体: ${fontFile}`);
+        });
+      });
+    }
   }
 );
 

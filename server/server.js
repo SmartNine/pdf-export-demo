@@ -8,6 +8,17 @@ const { v4: uuidv4 } = require("uuid");
 const app = express();
 const PORT = 4100;
 
+// ✅ 添加字体静态托管
+app.use(
+  "/fonts",
+  express.static(path.join(__dirname, "public/fonts"), {
+    setHeaders(res) {
+      res.set("Access-Control-Allow-Origin", "*");
+      res.set("Access-Control-Allow-Methods", "GET");
+    },
+  })
+);
+
 const exportRouter = require("./routes/export");
 app.use("/api/export", exportRouter);
 

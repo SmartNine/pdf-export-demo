@@ -31,6 +31,17 @@
       :disabled="isLoading"
       ref="fileInputRef"
     />
+    <select
+      v-model="selectedFont"
+      @change="applySelectedFont"
+      :disabled="isLoading"
+    >
+      <option v-for="font in fontOptions" :key="font.name" :value="font.name">
+        {{ font.name }}
+      </option>
+    </select>
+
+    <button @click="addText">添加文字</button>
     <button @click="exportDesign" :disabled="isLoading">导出 PDF</button>
     <button @click="downloadZip" :disabled="!zipDownloadUrl">下载 ZIP</button>
     <button v-if="isDev" @click="saveLocally" :disabled="isLoading">
@@ -45,6 +56,24 @@
 import { ref, reactive, onMounted, nextTick } from "vue";
 import { fabric } from "fabric";
 import { loadSvgToCanvas } from "../utils/svgLoader";
+import { loadCustomFont } from "../utils/fontLoader";
+
+const fontOptions = [
+  {
+    name: "Roboto Condensed",
+    url: `${
+      import.meta.env.VITE_BACKEND_URL
+    }/fonts/Roboto_Condensed-Regular.ttf`,
+  },
+  {
+    name: "Source Han Serif SC",
+    url: `${
+      import.meta.env.VITE_BACKEND_URL
+    }/fonts/SourceHanSerifSC-Regular.otf`,
+  },
+];
+
+const selectedFont = ref("Roboto Condensed"); // 默认字体
 
 // 🔧 添加一个变量来存储开发模式状态
 const isDev = import.meta.env.DEV;
@@ -67,6 +96,70 @@ const lineVisibility = reactive({
 // 🔧 添加初始化状态追踪
 const canvasReady = ref(false);
 const loadingQueue = ref([]);
+
+// 应用字体到当前选中文字对象
+async function applySelectedFont() {
+  const font = fontOptions.find((f) => f.name === selectedFont.value);
+  if (!font) return;
+
+  const success = await loadCustomFont(font.name, font.url);
+  if (!success) {
+    alert(`无法加载字体 ${font.name}`);
+    return;
+  }
+
+  const activeObject = canvas.value?.getActiveObject();
+  if (activeObject && activeObject.type === "text") {
+    activeObject.set("fontFamily", font.name);
+    canvas.value?.requestRenderAll();
+  }
+}
+
+async function addText() {
+  const fontMeta = fontOptions.find((f) => f.name === selectedFont.value);
+
+  try {
+    // 只有自定义字体才需要加载
+    if (fontMeta && fontMeta.url) {
+      const loadSuccess = await loadCustomFont(fontMeta.name, fontMeta.url);
+      if (!loadSuccess) {
+        alert(`字体 ${fontMeta.name} 加载失败，将使用默认字体`);
+      }
+    }
+
+    const text = new fabric.Textbox("输入文字", {
+      left: 100,
+      top: 100,
+      fontSize: 32,
+      fontFamily: fontMeta?.name || "Arial", // 使用字体名称
+      fill: "#000",
+      editable: true, // ✅ 可编辑
+      selectable: true, // ✅ 可选中
+      evented: true, // ✅ 能响应事件（必须）
+    });
+
+    canvas.value.add(text);
+    canvas.value.setActiveObject(text);
+    canvas.value.renderAll();
+  } catch (error) {
+    console.error("添加文字失败:", error);
+    alert("添加文字失败，请检查字体文件");
+  }
+}
+
+function getUsedFonts(canvas) {
+  const fonts = new Set();
+  canvas.getObjects().forEach((obj) => {
+    if (
+      obj.type === "text" ||
+      obj.type === "textbox" ||
+      obj.type === "i-text"
+    ) {
+      if (obj.fontFamily) fonts.add(obj.fontFamily);
+    }
+  });
+  return Array.from(fonts);
+}
 
 function resetFileInput() {
   if (fileInputRef.value) {
@@ -156,6 +249,17 @@ async function switchRegion() {
       const obj = e.target;
       if (obj) {
         console.log("对象正在拖动:", obj.left, obj.top);
+      }
+    });
+
+    canvas.value.on("mouse:dblclick", (e) => {
+      const obj = e.target;
+      if (obj && obj.type === "textbox") {
+        console.log("双击 Textbox, 进入编辑模式");
+        canvas.value.setActiveObject(obj);
+        obj.enterEditing();
+        obj.selectAll();
+        canvas.value.renderAll();
       }
     });
 
@@ -471,6 +575,11 @@ async function exportDesign() {
     // 🔧 关键修复：计算实际内容边界
     const contentBounds = getCanvasContentBounds(clonedCanvas);
 
+    // 💡 关键修改：生成字体样式
+    const usedFontNames = getUsedFonts(clonedCanvas);
+    const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
+    const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
+
     // 🔧 生成原始SVG
     const originalSVG = clonedCanvas.toSVG({
       suppressPreamble: false,
@@ -484,8 +593,16 @@ async function exportDesign() {
       height: contentBounds.height,
     });
 
-    // 🔧 SVG路径替换 - 保持原有逻辑
-    let finalSVG = originalSVG;
+    // 💡 关键修改：生成 SVG 后，直接调用 fixClipPathInSVGMarkup 函数
+    let fixedSVG = fixClipPathInSVGMarkup(originalSVG);
+
+    // 💡 关键修改：在 SVG 字符串中插入字体样式
+    let finalSVG = fixedSVG;
+    if (fontStyles) {
+      finalSVG = finalSVG.replace(/<svg[^>]*>/, (match) => {
+        return `${match}\n${fontStyles}`;
+      });
+    }
     let replacementCount = 0;
 
     imageFileNames.forEach((fileName, index) => {
@@ -575,6 +692,44 @@ async function exportDesign() {
     const previewBlob = await getPreviewBlob(canvas.value);
     formData.append("preview", previewBlob, "preview.png");
 
+    // =========================================================
+    // 💡 关键修改：处理并上传字体文件
+    // =========================================================
+
+    // 过滤出自定义字体，因为系统字体不需要上传
+    const usedCustomFonts = fontOptions.filter((font) =>
+      usedFontNames.includes(font.name)
+    );
+
+    console.log(
+      `🔍 找到 ${usedCustomFonts.length} 个自定义字体文件:`,
+      usedCustomFonts.map((f) => f.name)
+    );
+
+    // 遍历所有使用的自定义字体，以二进制形式上传
+    for (const font of usedCustomFonts) {
+      try {
+        const response = await fetch(font.url);
+        if (!response.ok) {
+          throw new Error(`无法下载字体文件: ${font.url}`);
+        }
+        const fontBlob = await response.blob();
+        const fontFileName = font.url.split("/").pop();
+
+        // 使用 formData.append 上传字体文件
+        formData.append("fonts", fontBlob, fontFileName);
+        console.log(
+          `📤 添加字体到导出: ${fontFileName}, 大小: ${fontBlob.size} bytes`
+        );
+      } catch (err) {
+        console.error(`❌ 字体文件上传失败: ${font.name}`, err);
+        // 如果某个字体上传失败，可以继续处理其他文件
+      }
+    }
+
+    // 将使用的字体名称列表作为元数据上传
+    formData.append("fontsUsed", JSON.stringify(usedFontNames));
+
     const images = canvas.value
       .getObjects()
       .filter((obj) => obj.type === "image" && obj.originalFileName);
@@ -618,6 +773,30 @@ async function exportDesign() {
   }
 }
 
+// ✅ 新增：在 SVG 中嵌入 @font-face 样式的函数
+function generateFontStylesForSVG(fontNames, fontUrlMap) {
+  let fontStyles = "";
+  for (const fontName of fontNames) {
+    const fontUrl = fontUrlMap.get(fontName);
+    // 只处理自定义字体
+    if (fontUrl) {
+      // ⚠️ 这里需要根据您的后端服务URL结构来构建正确的相对路径
+      // 假设后端在处理时，会将字体文件放在一个 'fonts/' 目录下
+      const fontFileName = fontUrl.split("/").pop();
+      fontStyles += `
+        @font-face {
+          font-family: '${fontName}';
+          src: url('fonts/${fontFileName}');
+        }
+      `;
+    }
+  }
+  if (fontStyles) {
+    return `<defs><style type="text/css">${fontStyles}</style></defs>`;
+  }
+  return "";
+}
+
 // 🔧 新增：下载 ZIP 文件的函数
 function downloadZip() {
   if (zipDownloadUrl.value) {
@@ -647,6 +826,11 @@ async function saveLocally() {
 
     // 🔧 关键修复：计算实际内容边界
     const contentBounds = getCanvasContentBounds(canvas.value);
+
+    // 💡 关键修改：生成 SVG 前先获取字体列表
+    const usedFontNames = getUsedFonts(clonedCanvas);
+    const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
+    const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
 
     const svg = canvas.value.toSVG({
       suppressPreamble: false,
@@ -798,9 +982,7 @@ function getPreviewBlob(fabricCanvas) {
   });
 }
 
-function fixClipPathInSVGMarkup(markup, object) {
-  if (!object.clipPath) return markup;
-
+function fixClipPathInSVGMarkup(markup) {
   // 🔧 修复 clipPath 的 transform 属性
   const clipPathRegex = /<clipPath[^>]*id="[^"]*"[^>]*>/g;
   let fixedMarkup = markup;
@@ -819,43 +1001,6 @@ function fixClipPathInSVGMarkup(markup, object) {
   });
 
   return fixedMarkup;
-}
-
-// 5. 添加调试函数（可选）
-function debugContentBounds() {
-  if (!canvas.value) return;
-
-  const bounds = getCanvasContentBounds(canvas.value);
-  console.log("🔍 当前内容边界:", bounds);
-
-  const canvasSize = {
-    width: canvas.value.getWidth(),
-    height: canvas.value.getHeight(),
-  };
-  console.log("🔍 画布尺寸:", canvasSize);
-
-  // 在画布上可视化边界框（调试用）
-  const rect = new fabric.Rect({
-    left: bounds.left,
-    top: bounds.top,
-    width: bounds.width,
-    height: bounds.height,
-    fill: "transparent",
-    stroke: "red",
-    strokeWidth: 2,
-    strokeDashArray: [10, 5],
-    selectable: false,
-    evented: false,
-  });
-
-  canvas.value.add(rect);
-  canvas.value.renderAll();
-
-  // 3秒后移除边界框
-  setTimeout(() => {
-    canvas.value.remove(rect);
-    canvas.value.renderAll();
-  }, 3000);
 }
 
 function downloadBlob(blob, filename) {
@@ -893,12 +1038,35 @@ onMounted(async () => {
       renderOnAddRemove: true,
       skipTargetFind: false,
       perPixelTargetFind: false,
+
+      // --- 关键修复：加入这些配置项 ---
+
+      // 阻止浏览器的右键菜单，避免与事件冲突
+      stopContextMenu: true,
+
+      // 阻止默认的文本选择行为
+      // 在某些浏览器中，双击会触发默认的文本选择，从而影响 Fabric.js 的事件
+      allowTouchScrolling: false,
+
+      // 启用此选项可以提高对象的可点击性
+      interactive: true,
     });
 
     canvas.value.on("object:moving", (e) => {
       const obj = e.target;
       if (obj) {
         console.log("对象正在拖动:", obj.left, obj.top);
+      }
+    });
+
+    canvas.value.on("mouse:dblclick", (e) => {
+      const obj = e.target;
+      if (obj && obj.type === "textbox") {
+        console.log("双击 Textbox, 进入编辑模式");
+        canvas.value.setActiveObject(obj);
+        obj.enterEditing();
+        obj.selectAll();
+        canvas.value.renderAll();
       }
     });
 
