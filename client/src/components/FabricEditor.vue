@@ -359,11 +359,48 @@ function addSizedSVGAttributes(svgText, width, height) {
 // 目的：导出时使用原始质量的图片而非压缩后的预览图
 async function getOriginalImageBlob(imgObj) {
   try {
-    // 🔧 优先使用原始文件（最高质量）
-    // if (imgObj.originalFile) {
-    //   console.log(`📷 使用原始文件: ${imgObj.originalFileName}`);
-    //   return imgObj.originalFile;
-    // }
+    // 🔧 颜色修复方案：重新处理原始文件以统一色彩空间
+    if (imgObj.originalFile) {
+      console.log(`📷 处理原始文件: ${imgObj.originalFileName}`);
+
+      // 🔧 关键修复：使用Canvas重新绘制以统一色彩空间
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+
+          // 设置画布尺寸为原始图片尺寸
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+
+          // 🔧 关键：强制使用sRGB色彩空间
+          ctx.drawImage(img, 0, 0);
+
+          // 转换为blob，强制JPEG格式和sRGB
+          canvas.toBlob(
+            (blob) => {
+              console.log(`✅ 颜色空间统一完成: ${imgObj.originalFileName}`);
+              resolve(blob);
+            },
+            "image/jpeg",
+            0.95
+          ); // 高质量JPEG
+        };
+
+        img.onerror = () => {
+          console.warn("原始文件加载失败，使用备用方案");
+          // fallback到当前显示的图片
+          if (imgObj._element && imgObj._element.src) {
+            fetch(imgObj._element.src)
+              .then((res) => res.blob())
+              .then(resolve);
+          }
+        };
+
+        img.src = URL.createObjectURL(imgObj.originalFile);
+      });
+    }
 
     // 🔧 兜底方案：从当前显示的src获取（可能是压缩后的）
     if (imgObj._element && imgObj._element.src) {
