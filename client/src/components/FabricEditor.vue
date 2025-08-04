@@ -47,7 +47,22 @@
     <button v-if="isDev" @click="saveLocally" :disabled="isLoading">
       保存本地
     </button>
+    <button @click="resetView" :disabled="isLoading">重置视图</button>
 
+    <div class="zoom-controls">
+      <button @click="zoomOut" :disabled="isLoading">−</button>
+      <input
+        type="range"
+        min="10"
+        max="300"
+        step="10"
+        v-model.number="zoomLevel"
+        @input="applyZoom"
+        :disabled="isLoading"
+      />
+      <button @click="zoomIn" :disabled="isLoading">+</button>
+      <span>{{ zoomLevel }}%</span>
+    </div>
     <canvas ref="canvasEl" width="800" height="800"></canvas>
   </div>
 </template>
@@ -96,6 +111,68 @@ const lineVisibility = reactive({
 // 🔧 添加初始化状态追踪
 const canvasReady = ref(false);
 const loadingQueue = ref([]);
+
+const zoomLevel = ref(0);
+const initialZoom = ref(1);
+const initialViewport = ref([1, 0, 0, 1, 0, 0]);
+
+let isDragging = false;
+let lastPosX = 0;
+let lastPosY = 0;
+
+function enableCanvasDragging() {
+  if (!canvas.value) return;
+
+  canvas.value.on("mouse:down", function (opt) {
+    const evt = opt.e;
+    if (evt.altKey || evt.button === 1) {
+      // 中键或按住 Alt 键开启拖动
+      isDragging = true;
+      canvas.value.selection = false;
+      lastPosX = evt.clientX;
+      lastPosY = evt.clientY;
+    }
+  });
+
+  canvas.value.on("mouse:move", function (opt) {
+    if (isDragging) {
+      const e = opt.e;
+      const vpt = canvas.value.viewportTransform;
+      vpt[4] += e.clientX - lastPosX;
+      vpt[5] += e.clientY - lastPosY;
+      canvas.value.requestRenderAll();
+      lastPosX = e.clientX;
+      lastPosY = e.clientY;
+    }
+  });
+
+  canvas.value.on("mouse:up", function () {
+    isDragging = false;
+    canvas.value.selection = true;
+  });
+}
+
+function applyZoom() {
+  if (!canvas.value) return;
+  const zoomFactor = (zoomLevel.value || 100) / 100;
+  canvas.value.setZoom(zoomFactor);
+  canvas.value.setViewportTransform([zoomFactor, 0, 0, zoomFactor, 0, 0]);
+  canvas.value.requestRenderAll();
+}
+
+function zoomIn() {
+  if (zoomLevel.value < 300) {
+    zoomLevel.value += 10;
+    applyZoom();
+  }
+}
+
+function zoomOut() {
+  if (zoomLevel.value > 10) {
+    zoomLevel.value -= 10;
+    applyZoom();
+  }
+}
 
 // 应用字体到当前选中文字对象
 async function applySelectedFont() {
@@ -303,11 +380,30 @@ async function switchRegion() {
     // 🔧 最终渲染
     canvas.value.renderAll();
     console.log("✅ 区域切换完成");
+
+    // 💾 记录初始 zoom 和 viewportTransform
+    initialZoom.value = canvas.value.getZoom();
+    initialViewport.value = [...canvas.value.viewportTransform];
+
+    // 👁️ 同步到 UI 的 zoom 滑块显示值
+    zoomLevel.value = Math.round(initialZoom.value * 100);
+
+    enableCanvasDragging();
   } catch (error) {
     console.error("❌ 切换区域失败:", error);
   } finally {
     isLoading.value = false;
   }
+}
+
+function resetView() {
+  if (!canvas.value) return;
+
+  canvas.value.setZoom(initialZoom.value);
+  canvas.value.setViewportTransform([...initialViewport.value]);
+  canvas.value.requestRenderAll();
+
+  zoomLevel.value = Math.round(initialZoom.value * 100);
 }
 
 function toggleLine(type) {
@@ -821,34 +917,7 @@ async function saveLocally() {
     const { restore } = prepareExportObjects(canvas.value);
 
     canvas.value.requestRenderAll();
-
     const json = canvas.value.toDatalessJSON();
-
-    // 🔧 关键修复：计算实际内容边界
-    const contentBounds = getCanvasContentBounds(canvas.value);
-
-    // 💡 关键修改：生成 SVG 前先获取字体列表
-    const usedFontNames = getUsedFonts(clonedCanvas);
-    const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
-    const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
-
-    const svg = canvas.value.toSVG({
-      suppressPreamble: false,
-      viewBox: {
-        x: contentBounds.left,
-        y: contentBounds.top,
-        width: contentBounds.width,
-        height: contentBounds.height,
-      },
-      width: contentBounds.width, // 🔧 关键：使用内容宽度
-      height: contentBounds.height, // 🔧 关键：使用内容高度
-      reviver: (markup, object) => {
-        if (object.clipPath) {
-          return fixClipPathInSVGMarkup(markup, object);
-        }
-        return markup;
-      },
-    });
 
     restore();
 
@@ -857,9 +926,91 @@ async function saveLocally() {
     canvas.value._originalViewTransform = backupState.originalViewTransform;
     canvas.value.requestRenderAll();
 
-    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), "design.svg");
+    // 🔧 创建临时克隆 canvas，与 exportDesign 保持一致
+    const tempCanvas = document.createElement("canvas");
+    const clonedCanvas = new fabric.Canvas(tempCanvas, {
+      width: canvas.value.getWidth(),
+      height: canvas.value.getHeight(),
+    });
+
+    // 🔧 收集图片信息
+    const imageFileNames = canvas.value
+      .getObjects()
+      .filter((obj) => obj.type === "image" && obj.originalFileName)
+      .map((obj) => obj.originalFileName);
+
+    console.log(`🔍 找到 ${imageFileNames.length} 个图片文件:`, imageFileNames);
+
+    await new Promise((resolve) => {
+      clonedCanvas.loadFromJSON(json, () => {
+        clonedCanvas.renderAll();
+        resolve();
+      });
+    });
+
+    // 🔧 关键修复：计算实际内容边界
+    const contentBounds = getCanvasContentBounds(clonedCanvas);
+
+    // 💡 关键修改：生成字体样式
+    const usedFontNames = getUsedFonts(clonedCanvas);
+    const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
+    const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
+
+    // 🔧 生成原始SVG
+    const originalSVG = clonedCanvas.toSVG({
+      suppressPreamble: false,
+      viewBox: {
+        x: contentBounds.left,
+        y: contentBounds.top,
+        width: contentBounds.width,
+        height: contentBounds.height,
+      },
+      width: contentBounds.width,
+      height: contentBounds.height,
+    });
+
+    // 💡 关键修改：生成 SVG 后，直接调用 fixClipPathInSVGMarkup 函数
+    let fixedSVG = fixClipPathInSVGMarkup(originalSVG);
+
+    // 💡 关键修改：在 SVG 字符串中插入字体样式
+    let finalSVG = fixedSVG;
+    if (fontStyles) {
+      finalSVG = finalSVG.replace(/<svg[^>]*>/, (match) => {
+        return `${match}\n${fontStyles}`;
+      });
+    }
+
+    // 💡 本地保存：保持 base64 内嵌格式，确保文件自包含
+    console.log("💾 本地保存模式：保持图片 base64 内嵌格式");
+
+    // ✅ 加入 mm 单位 - 使用内容尺寸
+    const finalSVGWithSize = addSizedSVGAttributes(
+      finalSVG,
+      contentBounds.width,
+      contentBounds.height
+    );
+
+    // 💾 本地保存：保持原始JSON格式（包含base64）
+    console.log("💾 保持JSON原始格式（包含base64图片数据）");
+    let processedJSON = JSON.stringify(json, null, 2);
+
+    // 🔧 验证本地保存格式
+    const jsonHasBase64 = processedJSON.includes("base64");
+    const svgHasBase64 = finalSVGWithSize.includes("base64");
+    console.log(
+      `🔍 本地保存验证: JSON包含base64=${jsonHasBase64}, SVG包含base64=${svgHasBase64}`
+    );
+
+    // 🔧 清理临时 canvas
+    clonedCanvas.dispose();
+
+    // 💡 下载文件
     downloadBlob(
-      new Blob([JSON.stringify(json, null, 2)], { type: "application/json" }),
+      new Blob([finalSVGWithSize], { type: "image/svg+xml" }),
+      "design.svg"
+    );
+    downloadBlob(
+      new Blob([processedJSON], { type: "application/json" }),
       "data.json"
     );
   } catch (error) {
@@ -1113,5 +1264,19 @@ input:disabled,
 select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.zoom-controls input[type="range"] {
+  width: 150px;
+}
+.zoom-controls span {
+  min-width: 40px;
+  text-align: center;
 }
 </style>
