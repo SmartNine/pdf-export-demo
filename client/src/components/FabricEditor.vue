@@ -86,6 +86,34 @@ const fontOptions = [
       import.meta.env.VITE_BACKEND_URL
     }/fonts/SourceHanSerifSC-Regular.otf`,
   },
+  {
+    name: "Artier EN",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/ArtierEN.ttf`,
+  },
+  {
+    name: "Birthday Card",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/BirthdayCard.ttf`,
+  },
+  {
+    name: "Bock Medium",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/Bock-Medium.ttf`,
+  },
+  {
+    name: "Brush Up Life",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/BrushUpLife.ttf`,
+  },
+  {
+    name: "Pencil",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/Pencil.ttf`,
+  },
+  {
+    name: "Sounso Quality",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/Sounso-Quality.ttf`,
+  },
+  {
+    name: "UNSII",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/UNSII.ttf`,
+  },
 ];
 
 const selectedFont = ref("Roboto Condensed"); // 默认字体
@@ -97,7 +125,15 @@ const canvas = ref(null);
 const canvasEl = ref(null);
 const fileInputRef = ref(null); // 🔧 新增：文件输入框的引用
 const selectedRegion = ref("uv_01");
-const regions = ["uv_01", "uv_02", "uv_03", "uv_04_01", "uv_04_02", "uv_04_03", "uv_05"];
+const regions = [
+  "uv_01",
+  "uv_02",
+  "uv_03",
+  "uv_04_01",
+  "uv_04_02",
+  "uv_04_03",
+  "uv_05",
+];
 const isLoading = ref(false);
 const zipDownloadUrl = ref(null);
 
@@ -504,6 +540,7 @@ async function importImageToCanvas(file) {
       }
 
       canvas.value.add(img);
+
       canvas.value.setActiveObject(img);
       canvas.value.requestRenderAll();
       resolve();
@@ -1022,21 +1059,49 @@ async function saveLocally() {
 }
 
 function getCanvasContentBounds(canvas) {
-  // 获取所有可导出对象（排除辅助线、clipPath 等）
-  const objects = canvas.getObjects().filter((obj) => {
+  // 获取所有可导出对象（排除辅助元素）
+  const contentObjects = canvas.getObjects().filter((obj) => {
     return (
       obj.visible !== false &&
       obj.excludeFromExport !== true &&
       obj.customType !== "guides" &&
+      obj.customType !== "uv_clipPath" && // 排除可见的UV剪切路径
+      obj.customType !== "uv_raw" && // 排除原始UV区域
       obj.type !== "clipPath"
     );
   });
 
-  if (objects.length === 0) {
-    return { left: 0, top: 0, width: 100, height: 100 };
+  // 🔧 新增：获取隐形边界对象
+  const boundaryObjects = canvas.getObjects().filter((obj) => {
+    return obj.customType === "uv_boundary" && obj.excludeFromExport !== true;
+  });
+
+  // 🔧 优先使用实际内容计算边界
+  if (contentObjects.length > 0) {
+    return calculateBoundsFromObjects(contentObjects);
   }
 
-  // 初始边界
+  // 🔧 如果没有实际内容，使用隐形边界对象确保导出完整的UV区域
+  if (boundaryObjects.length > 0) {
+    console.log("📐 使用隐形边界对象计算导出边界");
+    return calculateBoundsFromObjects(boundaryObjects);
+  }
+
+  // 🔧 最后的兜底：使用UV原始区域
+  const uvObjects = canvas
+    .getObjects()
+    .filter((obj) => obj.customType === "uv_raw");
+  if (uvObjects.length > 0) {
+    console.log("📐 使用UV原始区域计算导出边界");
+    return calculateBoundsFromObjects(uvObjects);
+  }
+
+  // 🔧 完全兜底
+  return { left: 0, top: 0, width: 100, height: 100 };
+}
+
+// 辅助函数：从对象数组计算边界
+function calculateBoundsFromObjects(objects) {
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -1045,15 +1110,13 @@ function getCanvasContentBounds(canvas) {
   objects.forEach((obj) => {
     let bounds = obj.getBoundingRect(true, true);
 
-    // ✅ 特别处理：如果是图片且带有 clipPath，限制最大边界
+    // 🔧 保留原有的图片clipPath特别处理
     if (
       obj.type === "image" &&
       obj.clipPath &&
       obj.clipPath.absolutePositioned
     ) {
       const clipBounds = obj.clipPath.getBoundingRect(true, true);
-
-      // 限制图片边界为剪裁区域 ±30px（保留一些边缘余量）
       bounds = {
         left: clipBounds.left - 30,
         top: clipBounds.top - 30,
@@ -1071,21 +1134,20 @@ function getCanvasContentBounds(canvas) {
     if (bottom > maxY) maxY = bottom;
   });
 
-  const width = maxX - minX;
-  const height = maxY - minY;
-
   return {
     left: minX,
     top: minY,
-    width,
-    height,
+    width: maxX - minX,
+    height: maxY - minY,
   };
 }
 
 function prepareExportObjects(canvas) {
   const processedObjects = [];
+  const hiddenObjects = []; // 存储需要临时修改的对象
 
   canvas.getObjects().forEach((obj) => {
+    // 处理图片的clipPath（原有逻辑保持不变）
     if (obj.type === "image" && obj.clipPath) {
       processedObjects.push({
         obj: obj,
@@ -1101,16 +1163,69 @@ function prepareExportObjects(canvas) {
           originY: obj.clipPath.originY,
         },
       });
+      obj.setCoords();
+    }
 
-      obj.setCoords(); // 强制刷新裁剪区域
+    // 🔧 处理UV区域 - 标记为不导出而不是修改样式
+    if (obj.isUvRegion) {
+      hiddenObjects.push({
+        obj: obj,
+        originalSettings: {
+          excludeFromExport: obj.excludeFromExport,
+        },
+      });
+      obj.set({
+        excludeFromExport: true,
+      });
+    }
+
+    // 🔧 处理UV剪切路径 - 编辑时可见，导出时隐藏
+    if (obj.customType === "uv_clipPath") {
+      hiddenObjects.push({
+        obj: obj,
+        originalSettings: {
+          excludeFromExport: obj.excludeFromExport,
+        },
+      });
+      obj.set({
+        excludeFromExport: true,
+      });
+    }
+
+    // 🔧 重要：隐形边界对象始终参与导出，不做任何修改
+    // if (obj.customType === "uv_boundary") {
+    //   // 不做任何处理，让它正常参与导出
+    // }
+
+    // 处理辅助线 - 根据复选框状态决定是否导出
+    if (obj.customType && lineVisibility[obj.customType] !== undefined) {
+      hiddenObjects.push({
+        obj: obj,
+        originalSettings: {
+          excludeFromExport: obj.excludeFromExport,
+        },
+      });
+
+      if (!lineVisibility[obj.customType]) {
+        obj.set({ excludeFromExport: true });
+      } else {
+        obj.set({ excludeFromExport: false });
+      }
     }
   });
 
   return {
     processedObjects,
+    hiddenObjects,
     restore() {
+      // 恢复图片clipPath设置
       processedObjects.forEach(({ originalClipPath, originalClipSettings }) => {
         originalClipPath.set(originalClipSettings);
+      });
+
+      // 恢复UV区域和辅助线设置
+      hiddenObjects.forEach(({ obj, originalSettings }) => {
+        obj.set(originalSettings);
       });
     },
   };

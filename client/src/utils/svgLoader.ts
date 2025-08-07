@@ -51,7 +51,6 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [8, 4],
                 customType: "bleed",
                 fill: "transparent",
-                excludeFromExport: true,
               });
             } else if (id.includes("safe")) {
               obj.set({
@@ -59,14 +58,12 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [5, 5],
                 customType: "safe",
                 fill: "transparent",
-                excludeFromExport: true,
               });
             } else if (id.includes("trim")) {
               obj.set({
                 stroke: "gray",
                 customType: "trim",
                 fill: "transparent",
-                excludeFromExport: true,
               });
             } else if (id.includes("fold")) {
               obj.set({
@@ -74,7 +71,6 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [4, 4],
                 customType: "fold",
                 fill: "transparent",
-                excludeFromExport: true,
               });
             }
 
@@ -129,17 +125,18 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 uvPathData.push(pathData);
               }
 
-              // 将原始 UV 区域对象设置为不可见、不可选中
+              // 将原始 UV 区域对象设置为编辑时可见，导出时隐藏
               obj.set({
-                fill: "transparent",
-                stroke: "transparent", // 隐藏线条
-                strokeWidth: 0,
-                opacity: 0,
-                visible: false,
+                fill: "#f8f8f8",
+                stroke: "#888",
+                strokeWidth: 1,
+                opacity: 1,
+                visible: true,
                 selectable: false,
                 evented: false,
-                excludeFromExport: true,
                 customType: "uv_raw", // 标记为原始 UV 对象，用于计算边界
+                // 新增标记，用于导出时识别
+                isUvRegion: true,
               });
               uvObjects.push(obj);
             } else if (tag === "uv") {
@@ -149,7 +146,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeWidth: 0.5,
                 opacity: 0.2,
                 customType: "uv_guide",
-                excludeFromExport: true,
+                // excludeFromExport: true,
               });
             }
 
@@ -180,7 +177,23 @@ export async function loadSvgToCanvas(canvas, url, tag) {
             customType: "uv_clipPath", // 标记为剪切路径
             id: "merged_uv_clipPath",
           });
+
+          // 🔧 新增：创建隐形边界对象（始终导出，但完全透明）
+          const invisibleBoundary = new fabric.Path(mergedPathData, {
+            absolutePositioned: true,
+            visible: true,
+            selectable: false,
+            evented: false,
+            fill: "transparent", // 完全透明
+            stroke: "transparent", // 完全透明
+            strokeWidth: 0,
+            opacity: 0, // 完全透明
+            customType: "uv_boundary", // 新的类型标识
+            id: "invisible_uv_boundary",
+            excludeFromExport: false, // 始终参与导出，确保边界
+          });
           processedObjects.push(uvClipPath);
+          processedObjects.push(invisibleBoundary); // 添加隐形边界对象
           console.log(`✅ 已创建合并的UV剪切路径`);
         }
 
