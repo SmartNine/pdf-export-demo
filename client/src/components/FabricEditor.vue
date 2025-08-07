@@ -97,7 +97,7 @@ const canvas = ref(null);
 const canvasEl = ref(null);
 const fileInputRef = ref(null); // 🔧 新增：文件输入框的引用
 const selectedRegion = ref("uv_01");
-const regions = ["uv_01", "uv_02", "uv_03", "uv_04", "uv_05"];
+const regions = ["uv_01", "uv_02", "uv_03", "uv_04_01", "uv_04_02", "uv_04_03", "uv_05"];
 const isLoading = ref(false);
 const zipDownloadUrl = ref(null);
 
