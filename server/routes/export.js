@@ -8,6 +8,186 @@ const archiver = require("archiver");
 
 const router = express.Router();
 
+// ICC配置文件路径配置
+const ICC_PROFILES = {
+  "Japan Color 2001 Coated": path.join(
+    __dirname,
+    "../icc-profiles/JapanColor2001Coated.icc"
+  ),
+};
+
+// 检查ICC配置文件是否存在
+function checkICCProfile(profileName) {
+  const profilePath = ICC_PROFILES[profileName];
+  if (!profilePath || !fs.existsSync(profilePath)) {
+    console.warn(`⚠️ ICC配置文件不存在: ${profileName} -> ${profilePath}`);
+    return null;
+  }
+  return profilePath;
+}
+
+// 检查ImageMagick可用性
+function checkImageMagickAvailability() {
+  return new Promise((resolve) => {
+    // 优先尝试 magick 命令（ImageMagick v7）
+    exec("magick -version", (error1) => {
+      if (!error1) {
+        resolve({ available: true, command: "magick" });
+      } else {
+        // 如果magick失败，再尝试 convert 命令（ImageMagick v6）
+        exec("convert -version", (error2) => {
+          if (!error2) {
+            resolve({ available: true, command: "convert" });
+          } else {
+            resolve({ available: false, command: null });
+          }
+        });
+      }
+    });
+  });
+}
+
+// 使用ImageMagick进行CMYK+ICC转换
+function createImageMagickCommand(
+  inputPdf,
+  outputPdf,
+  iccProfile = null,
+  magickCmd = "convert"
+) {
+  // 检查输入文件是否存在
+  if (!fs.existsSync(inputPdf)) {
+    console.error(`❌ 输入PDF文件不存在: ${inputPdf}`);
+    return null;
+  }
+
+  // 确保输出目录存在
+  const outputDir = path.dirname(outputPdf);
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  // 构建ImageMagick命令
+  let command = `${magickCmd} "${inputPdf}" -colorspace cmyk`;
+
+  // 添加质量和压缩设置
+  command += ` -quality 95`;
+  command += ` -compress zip`;
+
+  if (iccProfile && fs.existsSync(iccProfile)) {
+    command += ` -profile "${iccProfile}"`;
+    console.log(`✅ 使用ICC配置文件: ${iccProfile}`);
+  } else {
+    if (iccProfile) {
+      console.warn(`⚠️ ICC文件不存在: ${iccProfile}`);
+    }
+    console.log(`⚠️ 使用默认CMYK转换`);
+  }
+
+  command += ` "${outputPdf}"`;
+
+  console.log(`📝 ImageMagick命令: ${command}`);
+  return command;
+}
+
+// 增强的CMYK转换函数，包含回退机制
+async function convertToCMYKWithImageMagick(
+  inputPdf,
+  outputPdf,
+  iccProfile = null
+) {
+  return new Promise(async (resolve) => {
+    // 检查ImageMagick可用性
+    const magickInfo = await checkImageMagickAvailability();
+
+    if (!magickInfo.available) {
+      console.error("❌ ImageMagick不可用，请安装: brew install imagemagick");
+      resolve({
+        success: false,
+        usedCMYK: false,
+        usedICC: false,
+        error: "ImageMagick not available",
+      });
+      return;
+    }
+
+    console.log(`✅ 使用ImageMagick命令: ${magickInfo.command}`);
+
+    // 如果提供了ICC文件，先验证
+    if (iccProfile && !fs.existsSync(iccProfile)) {
+      console.warn(`⚠️ ICC文件不存在，将使用标准CMYK转换: ${iccProfile}`);
+      iccProfile = null;
+    }
+
+    const cmykCommand = createImageMagickCommand(
+      inputPdf,
+      outputPdf,
+      iccProfile,
+      magickInfo.command
+    );
+
+    if (!cmykCommand) {
+      resolve({
+        success: false,
+        usedCMYK: false,
+        usedICC: false,
+        error: "Command creation failed",
+      });
+      return;
+    }
+
+    console.log("🔄 执行ImageMagick CMYK转换...");
+
+    exec(cmykCommand, (error, stdout, stderr) => {
+      if (error) {
+        console.warn("第一次转换失败，尝试不使用ICC的回退方案:", stderr);
+
+        // 回退方案：不使用ICC配置文件
+        const fallbackCommand = createImageMagickCommand(
+          inputPdf,
+          outputPdf,
+          null,
+          magickInfo.command
+        );
+
+        exec(
+          fallbackCommand,
+          (fallbackError, fallbackStdout, fallbackStderr) => {
+            if (fallbackError) {
+              console.error("❌ 回退转换也失败:", fallbackStderr);
+              resolve({
+                success: false,
+                usedCMYK: false,
+                usedICC: false,
+                error: `ImageMagick conversion failed: ${fallbackStderr}`,
+              });
+            } else {
+              console.log("✅ 回退CMYK转换成功（无ICC）");
+              resolve({
+                success: true,
+                usedCMYK: true,
+                usedICC: false,
+                method: "ImageMagick fallback",
+              });
+            }
+          }
+        );
+      } else {
+        const usedICC = iccProfile !== null;
+        console.log("✅ ImageMagick CMYK转换成功");
+        if (usedICC) {
+          console.log("✅ ICC配置文件已应用");
+        }
+        resolve({
+          success: true,
+          usedCMYK: true,
+          usedICC,
+          method: "ImageMagick with ICC",
+        });
+      }
+    });
+  });
+}
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const taskId = req.taskId;
@@ -47,7 +227,9 @@ router.post(
   (req, res) => {
     const taskId = req.taskId;
     const exportDir = path.join(__dirname, "../exports", taskId);
-
+    const iccProfileName = req.body.iccProfile || "Japan Color 2001 Coated";
+    const iccProfilePath = checkICCProfile(iccProfileName);
+    console.log("🎨 ICC配置文件:", iccProfileName);
     const designSvgPath = req.files["design"][0].path;
     const finalPdfPath = path.join(exportDir, "final.pdf");
     const previewPngPath = path.join(exportDir, "preview.png");
@@ -75,21 +257,21 @@ router.post(
           fs.renameSync(previewFile.path, previewTarget);
         }
 
-        let usedCMYK = true;
-
         // ✅ CMYK 转换开始
         const cmykPdfPath = path.join(exportDir, "final-cmyk.pdf");
-        exec(
-          `gs -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dColorConversionStrategy=/CMYK -dProcessColorModel=/DeviceCMYK -sOutputFile="${cmykPdfPath}" "${finalPdfPath}"`,
-          (error2, stdout2, stderr2) => {
-            const usedCMYK = !error2;
-            if (error2) {
-              console.warn("Ghostscript CMYK 转换失败：", stderr2);
+
+        convertToCMYKWithImageMagick(finalPdfPath, cmykPdfPath, iccProfilePath)
+          .then((result) => {
+            const { success, usedCMYK, usedICC, method, error } = result;
+
+            if (!success) {
+              console.error("❌ CMYK转换失败:", error);
+              // 可以选择不生成CMYK文件，只返回原PDF，或者返回错误
             } else {
-              console.log("✅ Ghostscript CMYK PDF 完成:", cmykPdfPath);
+              console.log(`✅ CMYK转换成功，方法: ${method}`);
             }
 
-            // ✅ 插入 zip 打包逻辑
+            // 继续处理ZIP打包...
             const zipPath = path.join(__dirname, "../exports", `${taskId}.zip`);
             const output = fs.createWriteStream(zipPath);
             const archive = archiver("zip", { zlib: { level: 9 } });
@@ -102,9 +284,12 @@ router.post(
                 success: true,
                 taskId,
                 usedCMYK,
+                usedICC,
+                conversionMethod: method || "Unknown",
+                iccProfile: iccProfileName,
                 download: {
                   pdf: `/exports/${taskId}/final.pdf`,
-                  cmyk: `/exports/${taskId}/final-cmyk.pdf`,
+                  cmyk: success ? `/exports/${taskId}/final-cmyk.pdf` : null,
                   preview: `/exports/${taskId}/preview.png`,
                   svg: `/exports/${taskId}/design.svg`,
                   json: `/exports/${taskId}/data.json`,
@@ -123,8 +308,11 @@ router.post(
               `export-task-${taskId}`
             );
             archive.finalize();
-          }
-        );
+          })
+          .catch((err) => {
+            console.error("❌ 转换过程出错:", err);
+            res.status(500).json({ success: false, message: "CMYK转换失败" });
+          });
       }
     );
 
@@ -141,11 +329,11 @@ router.post(
       const fontsTargetDir = path.join(exportDir, "fonts");
       fs.mkdirSync(fontsTargetDir, { recursive: true });
 
-      fontsUsed.forEach(fontName => {
-        const fontFiles = fs.readdirSync(fontsSourceDir).filter(f =>
-          f.startsWith(fontName)
-        );
-        fontFiles.forEach(fontFile => {
+      fontsUsed.forEach((fontName) => {
+        const fontFiles = fs
+          .readdirSync(fontsSourceDir)
+          .filter((f) => f.startsWith(fontName));
+        fontFiles.forEach((fontFile) => {
           const src = path.join(fontsSourceDir, fontFile);
           const dest = path.join(fontsTargetDir, fontFile);
           fs.copyFileSync(src, dest);
