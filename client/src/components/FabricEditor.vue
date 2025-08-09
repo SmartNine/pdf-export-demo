@@ -792,14 +792,18 @@ function getObjectsForRegion(canvas, regionId) {
         objects.push(objData);
       }
     }
-    // 包含辅助线（如果需要的话）
+    // 🔧 修改辅助线处理逻辑，检查导出状态
     else if (
       obj.customType &&
       (obj.customType.includes("bleed") ||
         obj.customType.includes("trim") ||
         obj.customType.includes("safe"))
     ) {
-      if (isObjectInRegion(canvas, obj, regionId)) {
+      // 🔧 只有在没有被排除导出且在区域内时才包含
+      if (
+        obj.excludeFromExport !== true &&
+        isObjectInRegion(canvas, obj, regionId)
+      ) {
         objects.push(obj.toJSON());
       }
     }
