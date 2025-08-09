@@ -176,6 +176,8 @@ let lastPosY = 0;
 const selectedImageRegion = ref("");
 const availableRegions = ref([]);
 
+const detectedDPI = ref(72); // 在组件顶部添加这个reactive变量
+
 // 🆕 获取可用的UV区域列表
 function updateAvailableRegions() {
   if (!canvas.value) return;
@@ -418,6 +420,21 @@ async function switchRegion() {
       "uv"
     );
 
+    // 🆕 检测原始SVG的DPI
+    try {
+      const svgResponse = await fetch(
+        `/template/${selectedRegion.value}/uv_outline.svg`
+      );
+      const svgContent = await svgResponse.text();
+      detectedDPI.value = detectSVGDPI(svgContent);
+      console.log(
+        `✅ 检测到区域 ${selectedRegion.value} 的DPI: ${detectedDPI.value}`
+      );
+    } catch (error) {
+      console.warn("DPI检测失败，使用默认值:", error);
+      detectedDPI.value = 72;
+    }
+
     // 🔧 等待渲染完成
     await new Promise((resolve) => {
       canvas.value.renderAll();
@@ -518,25 +535,130 @@ function resizeImage(file, maxSize = 2048) {
   });
 }
 
-function addSizedSVGAttributes(svgText, width, height) {
-  // 提取原始 <svg ...> 标签
+function detectSVGDPI(svgContent, knownPhysicalSize = null) {
+  console.log("🔍 开始检测SVG DPI...");
+
+  // 1. 提取viewBox
+  const viewBoxMatch = svgContent.match(/viewBox\s*=\s*["']([^"']+)["']/);
+  if (!viewBoxMatch) {
+    console.warn("❌ 未找到viewBox，无法检测DPI");
+    return 72;
+  }
+
+  const [x, y, vbWidth, vbHeight] = viewBoxMatch[1]
+    .split(/\s+/)
+    .map(parseFloat);
+  console.log(`📐 ViewBox: ${vbWidth} x ${vbHeight}`);
+
+  // 2. 尝试从SVG属性获取物理尺寸
+  const widthMatch = svgContent.match(/width\s*=\s*["']([^"']+)["']/);
+  const heightMatch = svgContent.match(/height\s*=\s*["']([^"']+)["']/);
+
+  if (widthMatch && heightMatch) {
+    const widthStr = widthMatch[1];
+    const heightStr = heightMatch[1];
+
+    // 解析数值和单位
+    const widthValue = parseFloat(widthStr);
+    const heightValue = parseFloat(heightStr);
+    const widthUnit = widthStr.match(/[a-zA-Z%]+$/)?.[0];
+    const heightUnit = heightStr.match(/[a-zA-Z%]+$/)?.[0];
+
+    console.log(
+      `📏 SVG尺寸: ${widthValue}${widthUnit} x ${heightValue}${heightUnit}`
+    );
+
+    if (
+      widthUnit === "in" &&
+      heightUnit === "in" &&
+      widthValue > 0 &&
+      heightValue > 0
+    ) {
+      const dpiX = vbWidth / widthValue;
+      const dpiY = vbHeight / heightValue;
+      const avgDPI = Math.round((dpiX + dpiY) / 2);
+
+      console.log(
+        `✅ 从SVG属性检测到DPI: ${avgDPI} (X: ${dpiX.toFixed(
+          1
+        )}, Y: ${dpiY.toFixed(1)})`
+      );
+      return avgDPI;
+    }
+  }
+
+  // 3. 使用手动提供的物理尺寸
+  if (
+    knownPhysicalSize &&
+    knownPhysicalSize.width &&
+    knownPhysicalSize.height
+  ) {
+    const dpiX = vbWidth / knownPhysicalSize.width;
+    const dpiY = vbHeight / knownPhysicalSize.height;
+    const avgDPI = Math.round((dpiX + dpiY) / 2);
+
+    console.log(`✅ 从已知尺寸计算DPI: ${avgDPI}`);
+    return avgDPI;
+  }
+
+  // 4. 兜底：常见DPI值检测
+  const commonDPIs = [72, 96, 150, 300];
+  console.log(`🔍 ViewBox尺寸: ${vbWidth} x ${vbHeight}`);
+
+  // 如果是常见的文档尺寸比例，可能是72或300 DPI
+  const aspectRatio = vbWidth / vbHeight;
+  if (Math.abs(aspectRatio - 8.5 / 11) < 0.1) {
+    // 类似Letter纸张
+    console.log("📄 检测到类似Letter纸张比例");
+    // 根据尺寸大小判断DPI
+    if (vbWidth > 2000) return 300;
+    else return 72;
+  }
+
+  console.warn("⚠️ 无法准确检测DPI，使用默认值72");
+  return 72;
+}
+
+function addSizedSVGAttributes(
+  svgText,
+  width,
+  height,
+  unit = "in",
+  sourceDPI = null
+) {
   const svgTagMatch = svgText.match(/<svg[^>]*>/);
   if (!svgTagMatch) return svgText;
 
-  // 清除 width / height / viewBox / xmlns 属性（无论顺序、缩进）
+  // 🔧 如果没有提供DPI，尝试自动检测
+  let actualDPI = sourceDPI;
+  if (!actualDPI) {
+    // 这里可以传入原始模板信息来检测，或使用默认值
+    actualDPI = 72; // 或者调用 detectSVGDPI
+    console.log(`🔍 使用DPI: ${actualDPI}`);
+  }
+
+  let finalWidth = width;
+  let finalHeight = height;
+
+  if (unit === "in") {
+    finalWidth = (width / actualDPI).toFixed(4);
+    finalHeight = (height / actualDPI).toFixed(4);
+  } else if (unit === "mm") {
+    finalWidth = ((width / actualDPI) * 25.4).toFixed(4);
+    finalHeight = ((height / actualDPI) * 25.4).toFixed(4);
+  }
+
   const cleanedTag = svgTagMatch[0]
     .replace(/\swidth="[^"]*"/gi, "")
     .replace(/\sheight="[^"]*"/gi, "")
     .replace(/\sviewBox="[^"]*"/gi, "")
     .replace(/\sxmlns="[^"]*"/gi, "");
 
-  // 注入干净的新属性
   const replacedTag = cleanedTag.replace(
     /^<svg/,
-    `<svg width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg"`
+    `<svg width="${finalWidth}${unit}" height="${finalHeight}${unit}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg"`
   );
 
-  // 替换整个 <svg ...> 标签
   return svgText.replace(svgTagMatch[0], replacedTag);
 }
 
@@ -673,7 +795,7 @@ async function exportMultipleRegions() {
 
       // 🔧 建议添加这一行，等待渲染完成
       await new Promise((resolve) => setTimeout(resolve, 100));
-      
+
       // 🔧 新增：调试画布裁剪问题
       debugCanvasClipping(regionCanvas, regionId);
 
@@ -731,7 +853,9 @@ async function exportMultipleRegions() {
       const finalSVGWithSize = addSizedSVGAttributes(
         finalSVG,
         contentBounds.width,
-        contentBounds.height
+        contentBounds.height,
+        "in",
+        detectedDPI.value
       );
 
       // 添加这一行：
@@ -1233,11 +1357,13 @@ async function exportDesign() {
       }
     });
 
-    // ✅ 加入 mm 单位 - 使用内容尺寸
+    // ✅ 加入英寸单位 - 使用内容尺寸
     const finalSVGWithSize = addSizedSVGAttributes(
       finalSVG,
       contentBounds.width,
-      contentBounds.height
+      contentBounds.height,
+      "in",
+      detectedDPI.value
     );
 
     // 🔧 【新增】处理JSON中的base64 - 关键修复
@@ -1488,11 +1614,13 @@ async function saveLocally() {
     // 💡 本地保存：保持 base64 内嵌格式，确保文件自包含
     console.log("💾 本地保存模式：保持图片 base64 内嵌格式");
 
-    // ✅ 加入 mm 单位 - 使用内容尺寸
+    // ✅ 加入英寸单位 - 使用内容尺寸
     const finalSVGWithSize = addSizedSVGAttributes(
       finalSVG,
       contentBounds.width,
-      contentBounds.height
+      contentBounds.height,
+      "in",
+      detectedDPI.value
     );
 
     // 💾 本地保存：保持原始JSON格式（包含base64）
