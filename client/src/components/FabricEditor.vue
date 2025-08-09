@@ -31,6 +31,7 @@
       :disabled="isLoading"
       ref="fileInputRef"
     />
+
     <select
       v-model="selectedFont"
       @change="applySelectedFont"
@@ -506,6 +507,9 @@ function toggleLine(type) {
 
 function onImageUpload(e) {
   const file = e.target.files[0];
+
+  const input = e.target;
+
   if (file) {
     // 如果只有一个区域或用户没有选择，使用默认逻辑
     if (availableRegions.value.length <= 1 || !selectedImageRegion.value) {
@@ -515,6 +519,8 @@ function onImageUpload(e) {
       importImageToSpecificRegion(file, selectedImageRegion.value);
     }
   }
+
+  input.value = "";
 }
 
 function resizeImage(file, maxSize = 2048) {
