@@ -25,7 +25,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
 
         // 🔧 处理每个对象
         const processedObjects = [];
-        const uvPathData = []; // 用于存储所有 UV 区域的路径数据
+        const uvPathData = {}; // 🆕 改为对象，按区域ID分组存储
         const uvObjects = []; // 用于存储原始 UV 区域对象
 
         objects.forEach((obj, index) => {
@@ -122,7 +122,11 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               }
 
               if (pathData) {
-                uvPathData.push(pathData);
+                // 🆕 新增：按区域分组存储路径数据
+                if (!uvPathData[id]) {
+                  uvPathData[id] = [];
+                }
+                uvPathData[id].push(pathData);
               }
 
               // 将原始 UV 区域对象设置为编辑时可见，导出时隐藏
@@ -137,6 +141,8 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 customType: "uv_raw", // 标记为原始 UV 对象，用于计算边界
                 // 新增标记，用于导出时识别
                 isUvRegion: true,
+                // 🆕 新增：记录所属UV区域ID
+                uvRegionId: id,
               });
               uvObjects.push(obj);
             } else if (tag === "uv") {
@@ -162,39 +168,65 @@ export async function loadSvgToCanvas(canvas, url, tag) {
           }
         });
 
-        // 🔧 新增：在所有对象处理完成后，创建合并的 clipPath
-        if (uvPathData.length > 0) {
-          const mergedPathData = uvPathData.join(" "); // 将所有路径数据合并
-          const uvClipPath = new fabric.Path(mergedPathData, {
-            absolutePositioned: true,
-            visible: true,
-            selectable: false,
-            evented: false,
-            fill: "#f8f8f8",
-            stroke: "#888",
-            strokeWidth: 1,
-            opacity: 1,
-            customType: "uv_clipPath", // 标记为剪切路径
-            id: "merged_uv_clipPath",
+        // 🔧 在所有对象处理完成后，为每个UV区域创建独立的clipPath
+        if (Object.keys(uvPathData).length > 0) {
+          // 🆕 为每个UV区域创建独立的clipPath和边界对象
+          Object.entries(uvPathData).forEach(([regionId, paths]) => {
+            const mergedPathData = paths.join(" ");
+
+            // 🔧 确保路径数据的正确性
+            console.log(
+              `🔧 创建区域 ${regionId} 的clipPath，路径数据长度: ${mergedPathData.length}`
+            );
+
+            // 创建该区域的clipPath
+            const uvClipPath = new fabric.Path(mergedPathData, {
+              absolutePositioned: true,
+              visible: true,
+              selectable: false,
+              evented: false,
+              fill: "rgba(248,248,248,0.3)", // 🔧 半透明填充，便于查看效果
+              stroke: "#888",
+              strokeWidth: 1,
+              opacity: 0.8, // 🔧 稍微透明，便于看到下方内容
+              customType: "uv_clipPath",
+              id: `${regionId}_clipPath`,
+              uvRegionId: regionId, // 🆕 标记所属区域
+            });
+
+            // 🔧 确保路径正确设置
+            if (uvClipPath.path) {
+              uvClipPath._setPath(uvClipPath.path);
+            }
+
+            // 创建该区域的隐形边界对象
+            const invisibleBoundary = new fabric.Path(mergedPathData, {
+              absolutePositioned: true,
+              visible: false, // 🔧 设为不可见，避免干扰视觉
+              selectable: false,
+              evented: false,
+              fill: "transparent",
+              stroke: "transparent",
+              strokeWidth: 0,
+              opacity: 0,
+              customType: "uv_boundary",
+              id: `${regionId}_boundary`,
+              uvRegionId: regionId, // 🆕 标记所属区域
+              excludeFromExport: false,
+            });
+
+            // 🔧 确保边界对象的路径正确设置
+            if (invisibleBoundary.path) {
+              invisibleBoundary._setPath(invisibleBoundary.path);
+            }
+
+            processedObjects.push(uvClipPath);
+            processedObjects.push(invisibleBoundary);
           });
 
-          // 🔧 新增：创建隐形边界对象（始终导出，但完全透明）
-          const invisibleBoundary = new fabric.Path(mergedPathData, {
-            absolutePositioned: true,
-            visible: true,
-            selectable: false,
-            evented: false,
-            fill: "transparent", // 完全透明
-            stroke: "transparent", // 完全透明
-            strokeWidth: 0,
-            opacity: 0, // 完全透明
-            customType: "uv_boundary", // 新的类型标识
-            id: "invisible_uv_boundary",
-            excludeFromExport: false, // 始终参与导出，确保边界
-          });
-          processedObjects.push(uvClipPath);
-          processedObjects.push(invisibleBoundary); // 添加隐形边界对象
-          console.log(`✅ 已创建合并的UV剪切路径`);
+          console.log(
+            `✅ 已创建 ${Object.keys(uvPathData).length} 个UV区域的剪切路径`
+          );
         }
 
         // 🔧 批量添加对象到画布
@@ -259,6 +291,17 @@ export async function loadSvgToCanvas(canvas, url, tag) {
       }
     );
   });
+}
+
+// 🆕 新增：导出函数 - 获取所有UV区域ID
+export function getUVRegionIds(canvas) {
+  const uvRegionIds = new Set();
+  canvas.getObjects().forEach((obj) => {
+    if (obj.uvRegionId) {
+      uvRegionIds.add(obj.uvRegionId);
+    }
+  });
+  return Array.from(uvRegionIds);
 }
 
 // 🔧 单独的视图变换函数

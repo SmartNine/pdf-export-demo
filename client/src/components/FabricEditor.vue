@@ -41,12 +41,15 @@
       </option>
     </select>
 
-    <button @click="addText">添加文字</button>
-    <button @click="exportDesign" :disabled="isLoading">导出 PDF</button>
-    <button @click="downloadZip" :disabled="!zipDownloadUrl">下载 ZIP</button>
-    <button v-if="isDev" @click="saveLocally" :disabled="isLoading">
-      保存本地
+    <button @click="addText" :disabled="isLoading">添加文字</button>
+    <!-- <button @click="exportDesign" :disabled="isLoading">导出 PDF</button> -->
+    <button @click="exportMultipleRegions" :disabled="isLoading">
+      分区域导出 PDF
     </button>
+    <button @click="downloadZip" :disabled="!zipDownloadUrl">下载 ZIP</button>
+    <!-- <button v-if="isDev" @click="saveLocally" :disabled="isLoading">
+      保存本地
+    </button> -->
     <button @click="resetView" :disabled="isLoading">重置视图</button>
 
     <div class="zoom-controls">
@@ -63,6 +66,20 @@
       <button @click="zoomIn" :disabled="isLoading">+</button>
       <span>{{ zoomLevel }}%</span>
     </div>
+
+    <!-- 在模板中添加区域选择器 -->
+    <div class="region-selector" v-if="availableRegions.length > 1">
+      <label>选择图片放置区域:</label>
+      <select v-model="selectedImageRegion">
+        <option
+          v-for="region in availableRegions"
+          :key="region"
+          :value="region"
+        >
+          {{ region }}
+        </option>
+      </select>
+    </div>
     <canvas ref="canvasEl" width="800" height="800"></canvas>
   </div>
 </template>
@@ -70,7 +87,7 @@
 <script setup>
 import { ref, reactive, onMounted, nextTick } from "vue";
 import { fabric } from "fabric";
-import { loadSvgToCanvas } from "../utils/svgLoader";
+import { loadSvgToCanvas, getUVRegionIds } from "../utils/svgLoader";
 import { loadCustomFont } from "../utils/fontLoader";
 
 const fontOptions = [
@@ -155,6 +172,22 @@ const initialViewport = ref([1, 0, 0, 1, 0, 0]);
 let isDragging = false;
 let lastPosX = 0;
 let lastPosY = 0;
+
+const selectedImageRegion = ref("");
+const availableRegions = ref([]);
+
+// 🆕 获取可用的UV区域列表
+function updateAvailableRegions() {
+  if (!canvas.value) return;
+
+  const regions = getUVRegionIds(canvas.value);
+  availableRegions.value = regions;
+
+  // 如果还没有选择区域且有可用区域，选择第一个
+  if (!selectedImageRegion.value && regions.length > 0) {
+    selectedImageRegion.value = regions[0];
+  }
+}
 
 function enableCanvasDragging() {
   if (!canvas.value) return;
@@ -354,8 +387,9 @@ async function switchRegion() {
     resetFileInput(); // 💡 关键修改：重置文件输入框
     zipDownloadUrl.value = null; // 💡 关键修改：重置 ZIP 下载链接状态
 
-    // 🔧 等待DOM更新
+    // 🆕 切换区域后更新可用区域列表
     await nextTick();
+    updateAvailableRegions();
 
     // 🔧 重新绑定基础事件
     canvas.value.on("object:moving", (e) => {
@@ -453,104 +487,17 @@ function toggleLine(type) {
   canvas.value.requestRenderAll();
 }
 
-// 🔧 修复后的图片导入函数
-async function importImageToCanvas(file) {
-  if (!canvas.value || isLoading.value) return;
-
-  const clip = canvas.value
-    .getObjects()
-    .find((obj) => obj.customType === "uv_clipPath");
-
-  const uvRawObjects = canvas.value
-    .getObjects()
-    .filter((obj) => obj.customType === "uv_raw");
-
-  if (!clip || uvRawObjects.length === 0) {
-    console.error("❌ 未找到合并的 UV 剪切路径或原始 UV 区域");
-    return;
-  }
-
-  const combinedBounds = uvRawObjects.reduce(
-    (acc, obj) => {
-      const bounds = obj.getBoundingRect(true, true);
-      acc.left = Math.min(acc.left, bounds.left);
-      acc.top = Math.min(acc.top, bounds.top);
-      acc.right = Math.max(acc.right, bounds.left + bounds.width);
-      acc.bottom = Math.max(acc.bottom, bounds.top + bounds.height);
-      return acc;
-    },
-    { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }
-  );
-
-  const regionOriginalLeft = combinedBounds.left;
-  const regionOriginalTop = combinedBounds.top;
-  const regionOriginalWidth = combinedBounds.right - combinedBounds.left;
-  const regionOriginalHeight = combinedBounds.bottom - combinedBounds.top;
-
-  console.log("📸 导入图片到画布");
-
-  const clonedClipPath = fabric.util.object.clone(clip);
-
-  clonedClipPath.set({
-    absolutePositioned: true,
-    left: regionOriginalLeft,
-    top: regionOriginalTop,
-    scaleX: 1,
-    scaleY: 1,
-    angle: 0,
-    originX: "left",
-    originY: "top",
-  });
-
-  const dataUrl = await resizeImage(file, 2048);
-
-  return new Promise((resolve) => {
-    fabric.Image.fromURL(dataUrl, (img) => {
-      img.set({
-        left: regionOriginalLeft,
-        top: regionOriginalTop,
-        selectable: true,
-        hasControls: true,
-        hasBorders: true,
-        clipPath: clonedClipPath,
-        originX: "left",
-        originY: "top",
-        originalFileName: file.name,
-        // 🔧 【关键新增】：保存原始文件引用，用于导出时获取高质量图片
-        originalFile: file,
-      });
-
-      if (img.width && img.height) {
-        const scaleX = regionOriginalWidth / img.width;
-        const scaleY = regionOriginalHeight / img.height;
-        const imgScale = Math.max(scaleX, scaleY);
-
-        img.set({
-          scaleX: imgScale,
-          scaleY: imgScale,
-        });
-
-        const scaledImgWidth = img.getScaledWidth();
-        const scaledImgHeight = img.getScaledHeight();
-
-        img.set({
-          left: regionOriginalLeft + (regionOriginalWidth - scaledImgWidth) / 2,
-          top: regionOriginalTop + (regionOriginalHeight - scaledImgHeight) / 2,
-        });
-      }
-
-      canvas.value.add(img);
-
-      canvas.value.setActiveObject(img);
-      canvas.value.requestRenderAll();
-      resolve();
-    });
-  });
-}
-
 function onImageUpload(e) {
   const file = e.target.files[0];
-  if (file) importImageToCanvas(file);
+  if (file) {
+    // 如果只有一个区域或用户没有选择，使用默认逻辑
+    if (availableRegions.value.length <= 1 || !selectedImageRegion.value) {
+      importImageToCanvas(file);
+    } else {
+      // 使用用户选择的区域
+      importImageToSpecificRegion(file, selectedImageRegion.value);
+    }
+  }
 }
 
 function resizeImage(file, maxSize = 2048) {
@@ -655,6 +602,520 @@ async function getOriginalImageBlob(imgObj) {
   }
 }
 
+// 分页导出
+// 🆕 新增：分区域导出函数
+async function exportMultipleRegions() {
+  if (!canvas.value || isLoading.value) return;
+  isLoading.value = true;
+
+  // 重置下载链接
+  zipDownloadUrl.value = null;
+
+  try {
+    // 🔧 提前备份状态，避免视觉异常
+    const backupState = {
+      zoom: canvas.value.getZoom(),
+      viewportTransform: [...canvas.value.viewportTransform],
+      originalViewTransform: canvas.value._originalViewTransform,
+    };
+
+    // 获取所有UV区域ID
+    const uvRegionIds = getUVRegionIds(canvas.value);
+    console.log(`🔍 找到 ${uvRegionIds.length} 个UV区域:`, uvRegionIds);
+
+    if (uvRegionIds.length === 0) {
+      alert("未找到UV区域，无法分区域导出");
+      return;
+    }
+
+    // 🆕 为每个UV区域生成独立的设计数据
+    const regionExports = [];
+
+    for (const regionId of uvRegionIds) {
+      console.log(`📤 处理区域: ${regionId}`);
+
+      // 🔧 临时修改画布状态，立即恢复
+      canvas.value.setZoom(1);
+      canvas.value.setViewportTransform([1, 0, 0, 1, 0, 0]);
+
+      const { restore } = prepareExportObjects(canvas.value);
+      canvas.value.requestRenderAll();
+
+      // 获取该区域相关的所有对象
+      const regionObjects = getObjectsForRegion(canvas.value, regionId);
+
+      // 🔧 立即恢复状态，减少视觉异常时间
+      restore();
+      canvas.value.setZoom(backupState.zoom);
+      canvas.value.setViewportTransform(backupState.viewportTransform);
+      canvas.value._originalViewTransform = backupState.originalViewTransform;
+      canvas.value.requestRenderAll();
+
+      // 创建该区域的临时画布
+      const tempCanvas = document.createElement("canvas");
+      const regionCanvas = new fabric.Canvas(tempCanvas, {
+        width: canvas.value.getWidth(),
+        height: canvas.value.getHeight(),
+      });
+
+      // 将对象添加到区域画布
+      const regionJson = {
+        objects: regionObjects,
+        backgroundImage: null,
+      };
+
+      await new Promise((resolve) => {
+        regionCanvas.loadFromJSON(regionJson, () => {
+          regionCanvas.renderAll();
+          resolve();
+        });
+      });
+
+      // 计算该区域的内容边界
+      const contentBounds = getCanvasContentBounds(regionCanvas);
+
+      // 生成该区域的SVG
+      const usedFontNames = getUsedFonts(regionCanvas);
+      const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
+      const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
+
+      const originalSVG = regionCanvas.toSVG({
+        suppressPreamble: false,
+        viewBox: {
+          x: contentBounds.left,
+          y: contentBounds.top,
+          width: contentBounds.width,
+          height: contentBounds.height,
+        },
+        width: contentBounds.width,
+        height: contentBounds.height,
+      });
+
+      let fixedSVG = fixClipPathInSVGMarkup(originalSVG);
+      if (fontStyles) {
+        fixedSVG = fixedSVG.replace(/<svg[^>]*>/, (match) => {
+          return `${match}\n${fontStyles}`;
+        });
+      }
+
+      // 处理图片路径
+      const imageFileNames = regionCanvas
+        .getObjects()
+        .filter((obj) => obj.type === "image" && obj.originalFileName)
+        .map((obj) => obj.originalFileName);
+
+      let finalSVG = fixedSVG;
+      imageFileNames.forEach((fileName) => {
+        const relativePath = `../images/${fileName}`; // 🔧 添加 ../
+        const base64Pattern = /href="data:image\/[^;]+;base64,[^"]*"/;
+        const xlinkBase64Pattern =
+          /xlink:href="data:image\/[^;]+;base64,[^"]*"/;
+
+        if (base64Pattern.test(finalSVG)) {
+          finalSVG = finalSVG.replace(base64Pattern, `href="${relativePath}"`);
+        } else if (xlinkBase64Pattern.test(finalSVG)) {
+          finalSVG = finalSVG.replace(
+            xlinkBase64Pattern,
+            `xlink:href="${relativePath}"`
+          );
+        }
+      });
+
+      const finalSVGWithSize = addSizedSVGAttributes(
+        finalSVG,
+        contentBounds.width,
+        contentBounds.height
+      );
+
+      // 生成该区域的JSON
+      const regionJsonData = JSON.stringify(regionJson, null, 2);
+
+      // 处理JSON中的图片路径
+      let processedJSON = regionJsonData;
+      imageFileNames.forEach((fileName) => {
+        const relativePath = `../images/${fileName}`; // 🔧 添加 ../
+        const jsonBase64Pattern =
+          /"src"\s*:\s*"data:image\/[^;]+;base64,[^"]*"/g;
+        processedJSON = processedJSON.replace(
+          jsonBase64Pattern,
+          `"src":"${relativePath}"`
+        );
+      });
+
+      regionExports.push({
+        regionId,
+        svg: finalSVGWithSize,
+        json: processedJSON,
+        imageFileNames,
+        usedFontNames,
+        contentBounds,
+      });
+
+      regionCanvas.dispose();
+    }
+
+    // 🔧 最终发送请求，此时画布状态已经正常
+    await sendMultiRegionExportRequest(regionExports);
+  } catch (err) {
+    console.error("分区域导出失败：", err);
+    alert("分区域导出失败！");
+  } finally {
+    isLoading.value = false;
+    // 🔧 确保画布状态正常
+    if (canvas.value) {
+      canvas.value.requestRenderAll();
+    }
+  }
+}
+
+// 🆕 获取指定区域的所有相关对象
+function getObjectsForRegion(canvas, regionId) {
+  const objects = [];
+
+  canvas.getObjects().forEach((obj) => {
+    // 包含该区域的边界对象
+    if (obj.uvRegionId === regionId && obj.customType === "uv_boundary") {
+      objects.push(obj.toJSON());
+    }
+    // 包含位于该区域内的用户对象（图片、文字等）
+    else if (
+      obj.type === "image" ||
+      obj.type === "text" ||
+      obj.type === "textbox"
+    ) {
+      if (isObjectInRegion(canvas, obj, regionId)) {
+        // 需要保留原始文件信息，但序列化时会丢失，所以单独处理
+        const objData = obj.toJSON();
+        if (obj.originalFileName) {
+          objData.originalFileName = obj.originalFileName;
+        }
+        objects.push(objData);
+      }
+    }
+    // 包含辅助线（如果需要的话）
+    else if (
+      obj.customType &&
+      (obj.customType.includes("bleed") ||
+        obj.customType.includes("trim") ||
+        obj.customType.includes("safe"))
+    ) {
+      if (isObjectInRegion(canvas, obj, regionId)) {
+        objects.push(obj.toJSON());
+      }
+    }
+  });
+
+  return objects;
+}
+
+// 🆕 判断对象是否在指定区域内
+function isObjectInRegion(canvas, obj, regionId) {
+  // 🔧 如果对象本身就标记了所属区域，直接返回
+  if (obj.uvRegionId === regionId) {
+    return true;
+  }
+
+  // 🔧 获取该区域的边界对象
+  const regionBoundary = canvas
+    .getObjects()
+    .find(
+      (boundaryObj) =>
+        boundaryObj.uvRegionId === regionId &&
+        boundaryObj.customType === "uv_boundary"
+    );
+
+  if (!regionBoundary) {
+    console.warn(`⚠️ 未找到区域 ${regionId} 的边界对象`);
+    return false;
+  }
+
+  // 🔧 改进的边界检测：检查对象的包围盒是否与区域有交集
+  const objBounds = obj.getBoundingRect(true, true);
+  const regionBounds = regionBoundary.getBoundingRect(true, true);
+
+  // 检查两个矩形是否有交集
+  const hasIntersection = !(
+    objBounds.left > regionBounds.left + regionBounds.width ||
+    objBounds.left + objBounds.width < regionBounds.left ||
+    objBounds.top > regionBounds.top + regionBounds.height ||
+    objBounds.top + objBounds.height < regionBounds.top
+  );
+
+  // 🔧 如果有交集，进一步检查对象中心点是否在区域内
+  if (hasIntersection) {
+    const objCenter = obj.getCenterPoint();
+    const isInside =
+      objCenter.x >= regionBounds.left &&
+      objCenter.x <= regionBounds.left + regionBounds.width &&
+      objCenter.y >= regionBounds.top &&
+      objCenter.y <= regionBounds.top + regionBounds.height;
+
+    console.log(`🔍 对象 ${obj.type} 在区域 ${regionId} 中: ${isInside}`, {
+      objCenter,
+      regionBounds,
+      hasIntersection,
+    });
+
+    return isInside;
+  }
+
+  return false;
+}
+
+// 🆕 完整的指定区域图片导入函数
+async function importImageToSpecificRegion(file, regionId) {
+  if (!canvas.value || isLoading.value) return;
+
+  console.log(`📍 导入图片到指定区域: ${regionId}`);
+
+  // 🔧 查找指定区域的clipPath
+  const selectedClipPath = canvas.value
+    .getObjects()
+    .find(
+      (obj) => obj.customType === "uv_clipPath" && obj.uvRegionId === regionId
+    );
+
+  if (!selectedClipPath) {
+    console.error(`❌ 未找到区域 ${regionId} 的剪切路径`);
+    alert(`未找到区域 ${regionId}，请确认区域存在`);
+    return;
+  }
+
+  // 🔧 获取该区域的原始UV对象来计算边界
+  const regionUvObjects = canvas.value
+    .getObjects()
+    .filter(
+      (obj) => obj.customType === "uv_raw" && obj.uvRegionId === regionId
+    );
+
+  if (regionUvObjects.length === 0) {
+    console.error(`❌ 未找到区域 ${regionId} 的原始UV对象`);
+    alert(`区域 ${regionId} 数据不完整`);
+    return;
+  }
+
+  // 🔧 计算该区域的边界
+  const combinedBounds = regionUvObjects.reduce(
+    (acc, obj) => {
+      const bounds = obj.getBoundingRect(true, true);
+      acc.left = Math.min(acc.left, bounds.left);
+      acc.top = Math.min(acc.top, bounds.top);
+      acc.right = Math.max(acc.right, bounds.left + bounds.width);
+      acc.bottom = Math.max(acc.bottom, bounds.top + bounds.height);
+      return acc;
+    },
+    { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }
+  );
+
+  const regionOriginalLeft = combinedBounds.left;
+  const regionOriginalTop = combinedBounds.top;
+  const regionOriginalWidth = combinedBounds.right - combinedBounds.left;
+  const regionOriginalHeight = combinedBounds.bottom - combinedBounds.top;
+
+  console.log(`📸 导入图片到区域 ${regionId}`, {
+    left: regionOriginalLeft,
+    top: regionOriginalTop,
+    width: regionOriginalWidth,
+    height: regionOriginalHeight,
+  });
+
+  // 🔧 克隆指定区域的clipPath
+  const clonedClipPath = fabric.util.object.clone(selectedClipPath);
+
+  clonedClipPath.set({
+    absolutePositioned: true,
+    left: regionOriginalLeft,
+    top: regionOriginalTop,
+    scaleX: 1,
+    scaleY: 1,
+    angle: 0,
+    originX: "left",
+    originY: "top",
+  });
+
+  const dataUrl = await resizeImage(file, 2048);
+
+  return new Promise((resolve) => {
+    fabric.Image.fromURL(dataUrl, (img) => {
+      img.set({
+        left: regionOriginalLeft,
+        top: regionOriginalTop,
+        selectable: true,
+        hasControls: true,
+        hasBorders: true,
+        clipPath: clonedClipPath,
+        originX: "left",
+        originY: "top",
+        originalFileName: file.name,
+        originalFile: file,
+        // 🆕 明确标记所属的UV区域ID
+        uvRegionId: regionId,
+      });
+
+      if (img.width && img.height) {
+        const scaleX = regionOriginalWidth / img.width;
+        const scaleY = regionOriginalHeight / img.height;
+        const imgScale = Math.max(scaleX, scaleY);
+
+        img.set({
+          scaleX: imgScale,
+          scaleY: imgScale,
+        });
+
+        const scaledImgWidth = img.getScaledWidth();
+        const scaledImgHeight = img.getScaledHeight();
+
+        img.set({
+          left: regionOriginalLeft + (regionOriginalWidth - scaledImgWidth) / 2,
+          top: regionOriginalTop + (regionOriginalHeight - scaledImgHeight) / 2,
+        });
+      }
+
+      canvas.value.add(img);
+      canvas.value.setActiveObject(img);
+      canvas.value.requestRenderAll();
+
+      console.log(`✅ 图片成功导入到区域 ${regionId}`);
+      resolve();
+    });
+  });
+}
+
+async function importImageToCanvas(file) {
+  if (!canvas.value || isLoading.value) return;
+
+  // 🔧 获取所有UV区域的clipPath
+  const uvClipPaths = canvas.value
+    .getObjects()
+    .filter((obj) => obj.customType === "uv_clipPath");
+
+  if (uvClipPaths.length === 0) {
+    console.error("❌ 未找到任何 UV 剪切路径");
+    alert("未找到可用的UV区域");
+    return;
+  }
+
+  console.log(`🔍 找到 ${uvClipPaths.length} 个UV剪切路径`);
+
+  // 🔧 选择要使用的区域
+  let selectedRegionId;
+
+  if (uvClipPaths.length === 1) {
+    // 只有一个区域，直接使用
+    selectedRegionId = uvClipPaths[0].uvRegionId;
+    console.log(`📍 自动选择唯一的UV区域: ${selectedRegionId}`);
+  } else {
+    // 🔧 直接弹窗选择，不检查 selectedImageRegion.value
+    const regionChoice = prompt(
+      `请选择要放置图片的区域:\n${uvClipPaths
+        .map((cp, i) => `${i}: ${cp.uvRegionId}`)
+        .join("\n")}`
+    );
+
+    if (regionChoice !== null) {
+      const index = parseInt(regionChoice);
+      if (index >= 0 && index < uvClipPaths.length) {
+        selectedRegionId = uvClipPaths[index].uvRegionId;
+      } else {
+        alert(`无效的选择`);
+        return;
+      }
+    } else {
+      return;
+    }
+  }
+
+  if (!selectedRegionId) {
+    console.error("❌ 未能确定目标区域");
+    return;
+  }
+
+  // 🔧 调用指定区域导入函数
+  return importImageToSpecificRegion(file, selectedRegionId);
+}
+
+// 🆕 发送多区域导出请求
+async function sendMultiRegionExportRequest(regionExports) {
+  const formData = new FormData();
+
+  // 添加区域数量信息
+  formData.append("exportType", "multiRegion");
+  formData.append("regionCount", regionExports.length.toString());
+
+  // 为每个区域添加文件
+  regionExports.forEach((regionData, index) => {
+    formData.append(
+      `region_${index}_svg`,
+      new Blob([regionData.svg], { type: "image/svg+xml" }),
+      `${regionData.regionId}.svg`
+    );
+    formData.append(
+      `region_${index}_json`,
+      new Blob([regionData.json], { type: "application/json" }),
+      `${regionData.regionId}.json`
+    );
+    formData.append(`region_${index}_id`, regionData.regionId);
+  });
+
+  // 添加预览图
+  const previewBlob = await getPreviewBlob(canvas.value);
+  formData.append("preview", previewBlob, "preview.png");
+
+  // 收集并添加所有使用的图片（去重）
+  const allImageFileNames = [
+    ...new Set(regionExports.flatMap((r) => r.imageFileNames)),
+  ];
+  const images = canvas.value
+    .getObjects()
+    .filter((obj) => obj.type === "image" && obj.originalFileName);
+
+  for (const imgObj of images) {
+    if (allImageFileNames.includes(imgObj.originalFileName)) {
+      const blob = await getOriginalImageBlob(imgObj);
+      formData.append("images", blob, imgObj.originalFileName);
+    }
+  }
+
+  // 收集并添加所有使用的字体（去重）
+  const allUsedFontNames = [
+    ...new Set(regionExports.flatMap((r) => r.usedFontNames)),
+  ];
+  const usedCustomFonts = fontOptions.filter((font) =>
+    allUsedFontNames.includes(font.name)
+  );
+
+  for (const font of usedCustomFonts) {
+    try {
+      const response = await fetch(font.url);
+      if (response.ok) {
+        const fontBlob = await response.blob();
+        const fontFileName = font.url.split("/").pop();
+        formData.append("fonts", fontBlob, fontFileName);
+      }
+    } catch (err) {
+      console.error(`字体文件上传失败: ${font.name}`, err);
+    }
+  }
+
+  formData.append("fontsUsed", JSON.stringify(allUsedFontNames));
+
+  // 发送请求
+  const res = await fetch("/api/export", {
+    method: "POST",
+    body: formData,
+  });
+
+  const result = JSON.parse(await res.text());
+
+  if (result.success) {
+    zipDownloadUrl.value = getBackendUrl(result.download.zip);
+    alert(`✅ 成功生成 ${regionExports.length} 个区域的PDF文件！`);
+  } else {
+    alert("分区域导出失败，请检查服务器日志");
+  }
+}
+// 分页导出
+
 async function exportDesign() {
   if (!canvas.value || isLoading.value) return;
   isLoading.value = true;
@@ -738,26 +1199,18 @@ async function exportDesign() {
     }
     let replacementCount = 0;
 
-    imageFileNames.forEach((fileName, index) => {
-      const relativePath = `images/${fileName}`;
+    imageFileNames.forEach((fileName) => {
+      const relativePath = `../images/${fileName}`; // 🔧 添加 ../ 回到上级目录
 
       const base64Pattern = /href="data:image\/[^;]+;base64,[^"]*"/;
       const xlinkBase64Pattern = /xlink:href="data:image\/[^;]+;base64,[^"]*"/;
 
       if (base64Pattern.test(finalSVG)) {
         finalSVG = finalSVG.replace(base64Pattern, `href="${relativePath}"`);
-        replacementCount++;
-        console.log(
-          `✅ 替换SVG图片 ${index + 1}: ${fileName} -> ${relativePath}`
-        );
       } else if (xlinkBase64Pattern.test(finalSVG)) {
         finalSVG = finalSVG.replace(
           xlinkBase64Pattern,
           `xlink:href="${relativePath}"`
-        );
-        replacementCount++;
-        console.log(
-          `✅ 替换SVG图片 ${index + 1} (xlink): ${fileName} -> ${relativePath}`
         );
       }
     });
@@ -775,7 +1228,7 @@ async function exportDesign() {
 
     // 替换JSON中的base64图片数据
     imageFileNames.forEach((fileName, index) => {
-      const relativePath = `images/${fileName}`;
+      const relativePath = `../images/${fileName}`; // 🔧 修改：添加 ../ 回到上级目录
 
       // 🔧 匹配JSON中的base64图片数据
       // JSON格式: "src":"data:image/jpeg;base64,..."
@@ -803,9 +1256,9 @@ async function exportDesign() {
 
     // 🔧 验证JSON处理结果
     const jsonHasBase64 = processedJSON.includes("base64");
-    const jsonHasImages = processedJSON.includes("images/");
+    const jsonHasImages = processedJSON.includes("../images/"); // 🔧 修改验证路径
     console.log(
-      `🔍 JSON处理结果: 包含base64=${jsonHasBase64}, 包含images/=${jsonHasImages}`
+      `🔍 JSON处理结果: 包含base64=${jsonHasBase64}, 包含../images/=${jsonHasImages}`
     );
 
     clonedCanvas.dispose();
@@ -906,20 +1359,17 @@ async function exportDesign() {
   }
 }
 
-// ✅ 新增：在 SVG 中嵌入 @font-face 样式的函数
+// 修改 generateFontStylesForSVG 函数中的字体路径
 function generateFontStylesForSVG(fontNames, fontUrlMap) {
   let fontStyles = "";
   for (const fontName of fontNames) {
     const fontUrl = fontUrlMap.get(fontName);
-    // 只处理自定义字体
     if (fontUrl) {
-      // ⚠️ 这里需要根据您的后端服务URL结构来构建正确的相对路径
-      // 假设后端在处理时，会将字体文件放在一个 'fonts/' 目录下
       const fontFileName = fontUrl.split("/").pop();
       fontStyles += `
         @font-face {
           font-family: '${fontName}';
-          src: url('fonts/${fontFileName}');
+          src: url('../fonts/${fontFileName}'); // 🔧 添加 ../ 回到上级目录
         }
       `;
     }
@@ -1393,5 +1843,23 @@ select:disabled {
 .zoom-controls span {
   min-width: 40px;
   text-align: center;
+}
+
+/* 添加样式 */
+.region-selector {
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.region-selector label {
+  font-weight: bold;
+}
+
+.region-selector select {
+  padding: 5px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
 }
 </style>
