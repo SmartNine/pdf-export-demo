@@ -671,8 +671,15 @@ async function exportMultipleRegions() {
         });
       });
 
+      // 🔧 建议添加这一行，等待渲染完成
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      
+      // 🔧 新增：调试画布裁剪问题
+      debugCanvasClipping(regionCanvas, regionId);
+
       // 计算该区域的内容边界
       const contentBounds = getCanvasContentBounds(regionCanvas);
+      console.log(`🔍 区域 ${regionId} 最终边界:`, contentBounds);
 
       // 生成该区域的SVG
       const usedFontNames = getUsedFonts(regionCanvas);
@@ -727,6 +734,13 @@ async function exportMultipleRegions() {
         contentBounds.height
       );
 
+      // 添加这一行：
+      const centeredSVG = fixSVGViewBoxCentering(
+        finalSVGWithSize,
+        contentBounds,
+        { width: contentBounds.width, height: contentBounds.height }
+      );
+
       // 生成该区域的JSON
       const regionJsonData = JSON.stringify(regionJson, null, 2);
 
@@ -744,7 +758,7 @@ async function exportMultipleRegions() {
 
       regionExports.push({
         regionId,
-        svg: finalSVGWithSize,
+        svg: centeredSVG, // 使用居中修复后的SVG
         json: processedJSON,
         imageFileNames,
         usedFontNames,
@@ -1512,71 +1526,60 @@ async function saveLocally() {
   }
 }
 
-function getCanvasContentBounds(canvas) {
-  // 获取所有可导出对象（排除辅助元素）
-  const contentObjects = canvas.getObjects().filter((obj) => {
-    return (
-      obj.visible !== false &&
-      obj.excludeFromExport !== true &&
-      obj.customType !== "guides" &&
-      obj.customType !== "uv_clipPath" && // 排除可见的UV剪切路径
-      obj.customType !== "uv_raw" && // 排除原始UV区域
-      obj.type !== "clipPath"
-    );
-  });
-
-  // 🔧 新增：获取隐形边界对象
-  const boundaryObjects = canvas.getObjects().filter((obj) => {
-    return obj.customType === "uv_boundary" && obj.excludeFromExport !== true;
-  });
-
-  // 🔧 优先使用实际内容计算边界
-  if (contentObjects.length > 0) {
-    return calculateBoundsFromObjects(contentObjects);
-  }
-
-  // 🔧 如果没有实际内容，使用隐形边界对象确保导出完整的UV区域
-  if (boundaryObjects.length > 0) {
-    console.log("📐 使用隐形边界对象计算导出边界");
-    return calculateBoundsFromObjects(boundaryObjects);
-  }
-
-  // 🔧 最后的兜底：使用UV原始区域
-  const uvObjects = canvas
-    .getObjects()
-    .filter((obj) => obj.customType === "uv_raw");
-  if (uvObjects.length > 0) {
-    console.log("📐 使用UV原始区域计算导出边界");
-    return calculateBoundsFromObjects(uvObjects);
-  }
-
-  // 🔧 完全兜底
-  return { left: 0, top: 0, width: 100, height: 100 };
-}
-
-// 辅助函数：从对象数组计算边界
+// 1. 修改 calculateBoundsFromObjects 函数，改进图片clipPath边界计算
 function calculateBoundsFromObjects(objects) {
+  console.log(`🔍 计算 ${objects.length} 个对象的边界...`);
+
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
     maxY = -Infinity;
 
-  objects.forEach((obj) => {
-    let bounds = obj.getBoundingRect(true, true);
+  objects.forEach((obj, index) => {
+    // 🔧 关键修复：获取对象的真实边界，忽略画布变换
+    let bounds;
 
-    // 🔧 保留原有的图片clipPath特别处理
-    if (
-      obj.type === "image" &&
-      obj.clipPath &&
-      obj.clipPath.absolutePositioned
-    ) {
-      const clipBounds = obj.clipPath.getBoundingRect(true, true);
+    const canvas = obj.canvas;
+    let originalVpt = null;
+    if (canvas) {
+      originalVpt = [...canvas.viewportTransform];
+      canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    }
+
+    bounds = obj.getBoundingRect(false, false);
+
+    if (canvas && originalVpt) {
+      canvas.setViewportTransform(originalVpt);
+    }
+
+    // 🔧 调试每个对象的边界
+    console.log(`  对象 ${index} (${obj.type || obj.customType}):`, bounds);
+
+    // 🔧 关键修复：改进图片clipPath边界计算
+    if (obj.type === "image" && obj.clipPath) {
+      let clipBounds;
+
+      // 获取clipPath的边界
+      if (obj.clipPath.absolutePositioned) {
+        clipBounds = obj.clipPath.getBoundingRect(false, false);
+      } else {
+        // 如果clipPath不是绝对定位，需要相对于图片计算
+        clipBounds = obj.clipPath.getBoundingRect(false, false);
+        clipBounds.left += obj.left;
+        clipBounds.top += obj.top;
+      }
+
+      console.log(`  图片clipPath原始边界:`, clipBounds);
+
+      // 🔧 不添加额外边距，直接使用clipPath边界
       bounds = {
-        left: clipBounds.left - 30,
-        top: clipBounds.top - 30,
-        width: clipBounds.width + 60,
-        height: clipBounds.height + 60,
+        left: clipBounds.left,
+        top: clipBounds.top,
+        width: clipBounds.width,
+        height: clipBounds.height,
       };
+
+      console.log(`  图片clipPath最终边界:`, bounds);
     }
 
     const right = bounds.left + bounds.width;
@@ -1588,12 +1591,253 @@ function calculateBoundsFromObjects(objects) {
     if (bottom > maxY) maxY = bottom;
   });
 
-  return {
+  const result = {
     left: minX,
     top: minY,
     width: maxX - minX,
     height: maxY - minY,
   };
+
+  console.log(
+    `📏 计算出的边界: left=${result.left}, top=${result.top}, width=${result.width}, height=${result.height}`
+  );
+  return result;
+}
+
+// 2. 修改 getCanvasContentBounds 函数，改进边界选择逻辑
+function getCanvasContentBounds(canvas) {
+  console.log("🔍 开始计算画布内容边界...");
+
+  // 🔧 优先使用边界对象，确保导出区域完整
+  const boundaryObjects = canvas.getObjects().filter((obj) => {
+    return obj.customType === "uv_boundary" && obj.excludeFromExport !== true;
+  });
+
+  console.log(`🔍 找到 ${boundaryObjects.length} 个边界对象`);
+
+  // 获取所有可导出对象（排除辅助元素）
+  const contentObjects = canvas.getObjects().filter((obj) => {
+    return (
+      obj.visible !== false &&
+      obj.excludeFromExport !== true &&
+      obj.customType !== "guides" &&
+      obj.customType !== "uv_clipPath" &&
+      obj.customType !== "uv_raw" &&
+      obj.type !== "clipPath"
+    );
+  });
+
+  console.log(`🔍 找到 ${contentObjects.length} 个内容对象`);
+
+  // UV原始区域对象
+  const uvObjects = canvas
+    .getObjects()
+    .filter((obj) => obj.customType === "uv_raw");
+  console.log(`🔍 找到 ${uvObjects.length} 个UV原始对象`);
+
+  // 🔧 新增：辅助线对象（bleed, trim, safe）
+  const guideObjects = canvas.getObjects().filter((obj) => {
+    return (
+      obj.customType &&
+      (obj.customType.includes("bleed") ||
+        obj.customType.includes("trim") ||
+        obj.customType.includes("safe")) &&
+      obj.excludeFromExport !== true
+    );
+  });
+  console.log(`🔍 找到 ${guideObjects.length} 个辅助线对象`);
+
+  let finalBounds;
+
+  // 🔧 改进边界选择逻辑
+  if (boundaryObjects.length > 0) {
+    console.log("📐 使用隐形边界对象计算导出边界");
+    finalBounds = calculateBoundsFromObjects(boundaryObjects);
+    console.log("📐 边界对象计算结果:", finalBounds);
+  }
+  // 🔧 新增：如果有辅助线对象，可以考虑使用它们作为边界参考
+  else if (guideObjects.length > 0) {
+    console.log("📐 使用辅助线对象计算导出边界");
+    const guideBounds = calculateBoundsFromObjects(guideObjects);
+    console.log("📐 辅助线对象计算结果:", guideBounds);
+
+    // 如果同时有内容对象，取两者的并集
+    if (contentObjects.length > 0) {
+      const contentBounds = calculateBoundsFromObjects(contentObjects);
+      console.log("📐 内容对象计算结果:", contentBounds);
+
+      // 取并集
+      finalBounds = {
+        left: Math.min(guideBounds.left, contentBounds.left),
+        top: Math.min(guideBounds.top, contentBounds.top),
+        width:
+          Math.max(
+            guideBounds.left + guideBounds.width,
+            contentBounds.left + contentBounds.width
+          ) - Math.min(guideBounds.left, contentBounds.left),
+        height:
+          Math.max(
+            guideBounds.top + guideBounds.height,
+            contentBounds.top + contentBounds.height
+          ) - Math.min(guideBounds.top, contentBounds.top),
+      };
+      console.log("📐 辅助线+内容并集结果:", finalBounds);
+    } else {
+      finalBounds = guideBounds;
+    }
+  }
+  // 如果没有边界对象但有实际内容，使用内容边界
+  else if (contentObjects.length > 0) {
+    console.log("📐 使用内容对象计算导出边界");
+    finalBounds = calculateBoundsFromObjects(contentObjects);
+    console.log("📐 内容对象计算结果:", finalBounds);
+  }
+  // 最后的兜底：使用UV原始区域
+  else if (uvObjects.length > 0) {
+    console.log("📐 使用UV原始区域计算导出边界");
+    finalBounds = calculateBoundsFromObjects(uvObjects);
+    console.log("📐 UV原始区域计算结果:", finalBounds);
+  }
+  // 完全兜底
+  else {
+    console.log("📐 使用兜底边界");
+    finalBounds = { left: 0, top: 0, width: 100, height: 100 };
+  }
+
+  // 🔧 检查边界合理性
+  if (finalBounds.width < 50 || finalBounds.height < 50) {
+    console.warn("⚠️ 检测到边界可能被过度裁剪:", finalBounds);
+
+    if (uvObjects.length > 0) {
+      const uvBounds = calculateBoundsFromObjects(uvObjects);
+      console.log("🔧 尝试使用UV原始区域边界:", uvBounds);
+
+      if (
+        uvBounds.width > finalBounds.width * 1.5 ||
+        uvBounds.height > finalBounds.height * 1.5
+      ) {
+        console.log("✅ 使用UV原始区域边界替代过小的边界");
+        finalBounds = uvBounds;
+      }
+    }
+  }
+
+  // 🔧 减少边距，避免过度扩展
+  const padding = 5; // 从10减少到5像素
+  finalBounds = {
+    left: finalBounds.left - padding,
+    top: finalBounds.top - padding,
+    width: finalBounds.width + padding * 2,
+    height: finalBounds.height + padding * 2,
+  };
+
+  console.log("✅ 最终导出边界（含边距）:", finalBounds);
+  return finalBounds;
+}
+
+// 3. 新增：专门处理图片居中的函数
+function centerImageInRegion(imageObj, regionBounds) {
+  if (!imageObj || !regionBounds) return;
+
+  console.log("🔧 居中图片到区域:", regionBounds);
+
+  // 获取图片的当前尺寸
+  const imgWidth = imageObj.getScaledWidth();
+  const imgHeight = imageObj.getScaledHeight();
+
+  // 计算居中位置
+  const centerX = regionBounds.left + regionBounds.width / 2;
+  const centerY = regionBounds.top + regionBounds.height / 2;
+
+  // 设置图片位置（以中心点定位）
+  imageObj.set({
+    left: centerX - imgWidth / 2,
+    top: centerY - imgHeight / 2,
+  });
+
+  console.log(
+    `✅ 图片已居中到 (${centerX - imgWidth / 2}, ${centerY - imgHeight / 2})`
+  );
+}
+
+// 4. 新增：SVG viewBox居中修复函数
+function fixSVGViewBoxCentering(svgString, actualBounds, targetSize) {
+  console.log("🔧 修复SVG viewBox居中问题");
+  console.log("  实际边界:", actualBounds);
+  console.log("  目标尺寸:", targetSize);
+
+  // 如果边界不是从(0,0)开始，调整viewBox
+  if (actualBounds.left !== 0 || actualBounds.top !== 0) {
+    const viewBoxRegex = /viewBox="([^"]+)"/;
+    const match = svgString.match(viewBoxRegex);
+
+    if (match) {
+      // 创建居中的viewBox
+      const newViewBox = `viewBox="0 0 ${actualBounds.width} ${actualBounds.height}"`;
+      svgString = svgString.replace(viewBoxRegex, newViewBox);
+      console.log(`✅ SVG viewBox 已调整为居中: ${newViewBox}`);
+
+      // 同时调整所有transform，将内容移动到以(0,0)为起点
+      const offsetX = -actualBounds.left;
+      const offsetY = -actualBounds.top;
+
+      if (Math.abs(offsetX) > 0.1 || Math.abs(offsetY) > 0.1) {
+        // 在svg根元素内添加一个group来应用偏移
+        svgString = svgString.replace(
+          /(<svg[^>]*>)/,
+          `$1<g transform="translate(${offsetX}, ${offsetY})">`
+        );
+        svgString = svgString.replace(/<\/svg>/, "</g></svg>");
+        console.log(`✅ SVG 内容已偏移 (${offsetX}, ${offsetY}) 以居中`);
+      }
+    }
+  }
+
+  return svgString;
+}
+
+// 3. 新增：专门调试画布裁剪问题的函数
+function debugCanvasClipping(canvas, regionId) {
+  console.log(`🔍 调试画布裁剪问题 - 区域: ${regionId}`);
+
+  // 获取画布尺寸
+  console.log(`📐 画布尺寸: ${canvas.getWidth()} x ${canvas.getHeight()}`);
+
+  // 获取所有对象的详细信息
+  const allObjects = canvas.getObjects();
+  console.log(`📝 画布上共有 ${allObjects.length} 个对象:`);
+
+  allObjects.forEach((obj, index) => {
+    const bounds = obj.getBoundingRect(false, false);
+    console.log(
+      `  ${index}: ${obj.type || obj.customType} - ${
+        obj.uvRegionId || "no region"
+      } - visible:${obj.visible} - exclude:${obj.excludeFromExport}`,
+      bounds
+    );
+  });
+
+  // 检查边界对象
+  const boundaryObjects = allObjects.filter(
+    (obj) => obj.customType === "uv_boundary"
+  );
+  if (boundaryObjects.length > 0) {
+    console.log("🔍 边界对象详情:");
+    boundaryObjects.forEach((obj, index) => {
+      const bounds = obj.getBoundingRect(false, false);
+      console.log(`  边界 ${index}: 区域${obj.uvRegionId}`, bounds);
+    });
+  }
+
+  // 检查UV原始对象
+  const uvObjects = allObjects.filter((obj) => obj.customType === "uv_raw");
+  if (uvObjects.length > 0) {
+    console.log("🔍 UV原始对象详情:");
+    uvObjects.forEach((obj, index) => {
+      const bounds = obj.getBoundingRect(false, false);
+      console.log(`  UV ${index}: 区域${obj.uvRegionId}`, bounds);
+    });
+  }
 }
 
 function prepareExportObjects(canvas) {
