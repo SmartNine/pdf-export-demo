@@ -43,14 +43,10 @@
     </select>
 
     <button @click="addText" :disabled="isLoading">添加文字</button>
-    <!-- <button @click="exportDesign" :disabled="isLoading">导出 PDF</button> -->
     <button @click="exportMultipleRegions" :disabled="isLoading">
       分区域导出 PDF
     </button>
     <button @click="downloadZip" :disabled="!zipDownloadUrl">下载 ZIP</button>
-    <!-- <button v-if="isDev" @click="saveLocally" :disabled="isLoading">
-      保存本地
-    </button> -->
     <button @click="resetView" :disabled="isLoading">重置视图</button>
 
     <div class="zoom-controls">
@@ -554,7 +550,7 @@ function detectSVGDPI(svgContent, knownPhysicalSize = null) {
   const [x, y, vbWidth, vbHeight] = viewBoxMatch[1]
     .split(/\s+/)
     .map(parseFloat);
-  console.log(`📐 ViewBox: ${vbWidth} x ${vbHeight}`);
+  console.log(`🔍 ViewBox: ${vbWidth} x ${vbHeight}`);
 
   // 2. 尝试从SVG属性获取物理尺寸
   const widthMatch = svgContent.match(/width\s*=\s*["']([^"']+)["']/);
@@ -563,17 +559,16 @@ function detectSVGDPI(svgContent, knownPhysicalSize = null) {
   if (widthMatch && heightMatch) {
     const widthStr = widthMatch[1];
     const heightStr = heightMatch[1];
-
-    // 解析数值和单位
     const widthValue = parseFloat(widthStr);
     const heightValue = parseFloat(heightStr);
     const widthUnit = widthStr.match(/[a-zA-Z%]+$/)?.[0];
     const heightUnit = heightStr.match(/[a-zA-Z%]+$/)?.[0];
 
     console.log(
-      `📏 SVG尺寸: ${widthValue}${widthUnit} x ${heightValue}${heightUnit}`
+      `🔍 SVG尺寸: ${widthValue}${widthUnit} x ${heightValue}${heightUnit}`
     );
 
+    // 处理英寸单位
     if (
       widthUnit === "in" &&
       heightUnit === "in" &&
@@ -585,44 +580,88 @@ function detectSVGDPI(svgContent, knownPhysicalSize = null) {
       const avgDPI = Math.round((dpiX + dpiY) / 2);
 
       console.log(
-        `✅ 从SVG属性检测到DPI: ${avgDPI} (X: ${dpiX.toFixed(
+        `✅ 从英寸单位检测到DPI: ${avgDPI} (X: ${dpiX.toFixed(
           1
         )}, Y: ${dpiY.toFixed(1)})`
       );
       return avgDPI;
     }
+
+    // 处理毫米单位
+    if (
+      widthUnit === "mm" &&
+      heightUnit === "mm" &&
+      widthValue > 0 &&
+      heightValue > 0
+    ) {
+      const inchWidth = widthValue / 25.4;
+      const inchHeight = heightValue / 25.4;
+      const dpiX = vbWidth / inchWidth;
+      const dpiY = vbHeight / inchHeight;
+      const avgDPI = Math.round((dpiX + dpiY) / 2);
+
+      console.log(
+        `✅ 从毫米单位检测到DPI: ${avgDPI} (物理尺寸: ${inchWidth.toFixed(
+          2
+        )}" x ${inchHeight.toFixed(2)}")`
+      );
+      return avgDPI;
+    }
+
+    // 处理厘米单位（tradeshow产品常用）
+    if (
+      widthUnit === "cm" &&
+      heightUnit === "cm" &&
+      widthValue > 0 &&
+      heightValue > 0
+    ) {
+      const inchWidth = widthValue / 2.54;
+      const inchHeight = heightValue / 2.54;
+      const dpiX = vbWidth / inchWidth;
+      const dpiY = vbHeight / inchHeight;
+      const avgDPI = Math.round((dpiX + dpiY) / 2);
+
+      console.log(
+        `✅ 从厘米单位检测到DPI: ${avgDPI} (物理尺寸: ${inchWidth.toFixed(
+          2
+        )}" x ${inchHeight.toFixed(2)}")`
+      );
+      return avgDPI;
+    }
+
+    // 处理像素单位但已知物理尺寸
+    if ((widthUnit === "px" || !widthUnit) && knownPhysicalSize) {
+      const dpiX = vbWidth / knownPhysicalSize.width;
+      const dpiY = vbHeight / knownPhysicalSize.height;
+      const avgDPI = Math.round((dpiX + dpiY) / 2);
+
+      console.log(`✅ 从已知物理尺寸计算DPI: ${avgDPI}`);
+      return avgDPI;
+    }
   }
 
-  // 3. 使用手动提供的物理尺寸
-  if (
-    knownPhysicalSize &&
-    knownPhysicalSize.width &&
-    knownPhysicalSize.height
-  ) {
-    const dpiX = vbWidth / knownPhysicalSize.width;
-    const dpiY = vbHeight / knownPhysicalSize.height;
-    const avgDPI = Math.round((dpiX + dpiY) / 2);
+  // 3. 🔧 基于ViewBox尺寸的智能推断（适用于大型tradeshow产品）
+  const totalPixels = vbWidth * vbHeight;
+  const maxDimension = Math.max(vbWidth, vbHeight);
 
-    console.log(`✅ 从已知尺寸计算DPI: ${avgDPI}`);
-    return avgDPI;
+  console.log(
+    `🔍 ViewBox分析: 最大尺寸=${maxDimension}px, 总像素=${totalPixels}`
+  );
+
+  // 🔧 针对大型展示产品的DPI推断
+  if (maxDimension > 5000) {
+    console.log(`🏗️ 大型展示产品尺寸(${maxDimension}px)，推断高分辨率DPI: 300`);
+    return 300;
+  } else if (maxDimension > 2000) {
+    console.log(`🏗️ 中型展示产品尺寸(${maxDimension}px)，推断中等DPI: 150`);
+    return 150;
+  } else if (maxDimension > 1000) {
+    console.log(`🏗️ 标准展示产品尺寸(${maxDimension}px)，推断标准DPI: 72`);
+    return 72;
+  } else {
+    console.log(`🏗️ 小型产品或图标尺寸(${maxDimension}px)，推断高DPI: 300`);
+    return 300; // 小尺寸可能是高分辨率的小部件
   }
-
-  // 4. 兜底：常见DPI值检测
-  const commonDPIs = [72, 96, 150, 300];
-  console.log(`🔍 ViewBox尺寸: ${vbWidth} x ${vbHeight}`);
-
-  // 如果是常见的文档尺寸比例，可能是72或300 DPI
-  const aspectRatio = vbWidth / vbHeight;
-  if (Math.abs(aspectRatio - 8.5 / 11) < 0.1) {
-    // 类似Letter纸张
-    console.log("📄 检测到类似Letter纸张比例");
-    // 根据尺寸大小判断DPI
-    if (vbWidth > 2000) return 300;
-    else return 72;
-  }
-
-  console.warn("⚠️ 无法准确检测DPI，使用默认值72");
-  return 72;
 }
 
 function addSizedSVGAttributes(
@@ -1190,6 +1229,10 @@ async function sendMultiRegionExportRequest(regionExports) {
   formData.append("exportType", "multiRegion");
   formData.append("regionCount", regionExports.length.toString());
 
+  // 🔧 仅新增这两行：
+  formData.append("detectedDPI", detectedDPI.value.toString());
+  formData.append("sourceRegion", selectedRegion.value);
+
   // 为每个区域添加文件
   regionExports.forEach((regionData, index) => {
     formData.append(
@@ -1264,251 +1307,6 @@ async function sendMultiRegionExportRequest(regionExports) {
 }
 // 分页导出
 
-async function exportDesign() {
-  if (!canvas.value || isLoading.value) return;
-  isLoading.value = true;
-
-  // 🔧 重置下载链接，避免在新的导出开始时显示旧的链接
-  zipDownloadUrl.value = null;
-
-  try {
-    const backupState = {
-      zoom: canvas.value.getZoom(),
-      viewportTransform: [...canvas.value.viewportTransform],
-      originalViewTransform: canvas.value._originalViewTransform,
-    };
-
-    canvas.value.setZoom(1);
-    canvas.value.setViewportTransform([1, 0, 0, 1, 0, 0]);
-
-    const { restore } = prepareExportObjects(canvas.value);
-
-    canvas.value.requestRenderAll();
-    const json = canvas.value.toDatalessJSON();
-
-    restore();
-
-    canvas.value.setZoom(backupState.zoom);
-    canvas.value.setViewportTransform(backupState.viewportTransform);
-    canvas.value._originalViewTransform = backupState.originalViewTransform;
-    canvas.value.requestRenderAll();
-
-    const tempCanvas = document.createElement("canvas");
-    const clonedCanvas = new fabric.Canvas(tempCanvas, {
-      width: canvas.value.getWidth(),
-      height: canvas.value.getHeight(),
-    });
-
-    // 🔧 收集图片信息
-    const imageFileNames = canvas.value
-      .getObjects()
-      .filter((obj) => obj.type === "image" && obj.originalFileName)
-      .map((obj) => obj.originalFileName);
-
-    console.log(`🔍 找到 ${imageFileNames.length} 个图片文件:`, imageFileNames);
-
-    await new Promise((resolve) => {
-      clonedCanvas.loadFromJSON(json, () => {
-        clonedCanvas.renderAll();
-        resolve();
-      });
-    });
-
-    // 🔧 关键修复：计算实际内容边界
-    const contentBounds = getCanvasContentBounds(clonedCanvas);
-
-    // 💡 关键修改：生成字体样式
-    const usedFontNames = getUsedFonts(clonedCanvas);
-    const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
-    const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
-
-    // 🔧 生成原始SVG
-    const originalSVG = clonedCanvas.toSVG({
-      suppressPreamble: false,
-      viewBox: {
-        x: contentBounds.left,
-        y: contentBounds.top,
-        width: contentBounds.width,
-        height: contentBounds.height,
-      },
-      width: contentBounds.width,
-      height: contentBounds.height,
-    });
-
-    // 💡 关键修改：生成 SVG 后，直接调用 fixClipPathInSVGMarkup 函数
-    let fixedSVG = fixClipPathInSVGMarkup(originalSVG);
-
-    // 💡 关键修改：在 SVG 字符串中插入字体样式
-    let finalSVG = fixedSVG;
-    if (fontStyles) {
-      finalSVG = finalSVG.replace(/<svg[^>]*>/, (match) => {
-        return `${match}\n${fontStyles}`;
-      });
-    }
-    let replacementCount = 0;
-
-    imageFileNames.forEach((fileName) => {
-      const relativePath = `../images/${fileName}`; // 🔧 添加 ../ 回到上级目录
-
-      const base64Pattern = /href="data:image\/[^;]+;base64,[^"]*"/;
-      const xlinkBase64Pattern = /xlink:href="data:image\/[^;]+;base64,[^"]*"/;
-
-      if (base64Pattern.test(finalSVG)) {
-        finalSVG = finalSVG.replace(base64Pattern, `href="${relativePath}"`);
-      } else if (xlinkBase64Pattern.test(finalSVG)) {
-        finalSVG = finalSVG.replace(
-          xlinkBase64Pattern,
-          `xlink:href="${relativePath}"`
-        );
-      }
-    });
-
-    // ✅ 加入英寸单位 - 使用内容尺寸
-    const finalSVGWithSize = addSizedSVGAttributes(
-      finalSVG,
-      contentBounds.width,
-      contentBounds.height,
-      "in",
-      detectedDPI.value
-    );
-
-    // 🔧 【新增】处理JSON中的base64 - 关键修复
-    console.log("🔧 开始处理JSON中的图片路径...");
-    let processedJSON = JSON.stringify(json, null, 2);
-
-    // 替换JSON中的base64图片数据
-    imageFileNames.forEach((fileName, index) => {
-      const relativePath = `../images/${fileName}`; // 🔧 修改：添加 ../ 回到上级目录
-
-      // 🔧 匹配JSON中的base64图片数据
-      // JSON格式: "src":"data:image/jpeg;base64,..."
-      const jsonBase64Pattern = /"src"\s*:\s*"data:image\/[^;]+;base64,[^"]*"/g;
-
-      // 查找所有匹配项
-      const matches = [...processedJSON.matchAll(jsonBase64Pattern)];
-      console.log(`🔍 在JSON中找到 ${matches.length} 个base64图片引用`);
-
-      if (matches.length > index) {
-        // 替换第index个匹配项
-        let currentIndex = 0;
-        processedJSON = processedJSON.replace(jsonBase64Pattern, (match) => {
-          if (currentIndex === index) {
-            console.log(
-              `✅ 替换JSON图片 ${index + 1}: ${fileName} -> ${relativePath}`
-            );
-            return `"src":"${relativePath}"`;
-          }
-          currentIndex++;
-          return match;
-        });
-      }
-    });
-
-    // 🔧 验证JSON处理结果
-    const jsonHasBase64 = processedJSON.includes("base64");
-    const jsonHasImages = processedJSON.includes("../images/"); // 🔧 修改验证路径
-    console.log(
-      `🔍 JSON处理结果: 包含base64=${jsonHasBase64}, 包含../images/=${jsonHasImages}`
-    );
-
-    clonedCanvas.dispose();
-
-    const formData = new FormData();
-    formData.append(
-      "design",
-      new Blob([finalSVGWithSize], { type: "image/svg+xml" }),
-      "design.svg"
-    );
-    // 🔧 【关键修改】使用处理后的JSON
-    formData.append(
-      "json",
-      new Blob([processedJSON], { type: "application/json" }),
-      "data.json"
-    );
-    const previewBlob = await getPreviewBlob(canvas.value);
-    formData.append("preview", previewBlob, "preview.png");
-
-    // =========================================================
-    // 💡 关键修改：处理并上传字体文件
-    // =========================================================
-
-    // 过滤出自定义字体，因为系统字体不需要上传
-    const usedCustomFonts = fontOptions.filter((font) =>
-      usedFontNames.includes(font.name)
-    );
-
-    console.log(
-      `🔍 找到 ${usedCustomFonts.length} 个自定义字体文件:`,
-      usedCustomFonts.map((f) => f.name)
-    );
-
-    // 遍历所有使用的自定义字体，以二进制形式上传
-    for (const font of usedCustomFonts) {
-      try {
-        const response = await fetch(font.url);
-        if (!response.ok) {
-          throw new Error(`无法下载字体文件: ${font.url}`);
-        }
-        const fontBlob = await response.blob();
-        const fontFileName = font.url.split("/").pop();
-
-        // 使用 formData.append 上传字体文件
-        formData.append("fonts", fontBlob, fontFileName);
-        console.log(
-          `📤 添加字体到导出: ${fontFileName}, 大小: ${fontBlob.size} bytes`
-        );
-      } catch (err) {
-        console.error(`❌ 字体文件上传失败: ${font.name}`, err);
-        // 如果某个字体上传失败，可以继续处理其他文件
-      }
-    }
-
-    // 将使用的字体名称列表作为元数据上传
-    formData.append("fontsUsed", JSON.stringify(usedFontNames));
-
-    const images = canvas.value
-      .getObjects()
-      .filter((obj) => obj.type === "image" && obj.originalFileName);
-
-    for (const imgObj of images) {
-      const blob = await getOriginalImageBlob(imgObj);
-      formData.append("images", blob, imgObj.originalFileName);
-      console.log(
-        `📤 添加图片到导出: ${imgObj.originalFileName}, 大小: ${blob.size} bytes`
-      );
-    }
-
-    const res = await fetch("/api/export", {
-      method: "POST",
-      body: formData,
-    });
-
-    const text = await res.text();
-    console.log("📥 服务器返回：", text);
-    const result = JSON.parse(text);
-    console.log("✅ 返回 JSON 结果：", result);
-
-    if (result.success) {
-      if (!result.usedCMYK) {
-        alert(
-          "⚠️ 当前导出为 RGB 模式，未成功转换为 CMYK。请联系管理员或重试。"
-        );
-      }
-      // 🔧 存储 ZIP 下载链接
-      zipDownloadUrl.value = getBackendUrl(result.download.zip);
-
-      window.open(getBackendUrl(result.download.pdf), "_blank");
-    } else {
-      alert("导出失败，请检查服务器日志");
-    }
-  } catch (err) {
-    console.error("导出失败：", err);
-    alert("导出失败！");
-  } finally {
-    isLoading.value = false;
-  }
-}
-
 // 修改 generateFontStylesForSVG 函数中的字体路径
 function generateFontStylesForSVG(fontNames, fontUrlMap) {
   let fontStyles = "";
@@ -1534,129 +1332,6 @@ function generateFontStylesForSVG(fontNames, fontUrlMap) {
 function downloadZip() {
   if (zipDownloadUrl.value) {
     window.open(zipDownloadUrl.value, "_blank");
-  }
-}
-
-async function saveLocally() {
-  if (!canvas.value || isLoading.value) return;
-  isLoading.value = true;
-
-  try {
-    const backupState = {
-      zoom: canvas.value.getZoom(),
-      viewportTransform: [...canvas.value.viewportTransform],
-      originalViewTransform: canvas.value._originalViewTransform,
-    };
-
-    canvas.value.setZoom(1);
-    canvas.value.setViewportTransform([1, 0, 0, 1, 0, 0]);
-
-    const { restore } = prepareExportObjects(canvas.value);
-
-    canvas.value.requestRenderAll();
-    const json = canvas.value.toDatalessJSON();
-
-    restore();
-
-    canvas.value.setZoom(backupState.zoom);
-    canvas.value.setViewportTransform(backupState.viewportTransform);
-    canvas.value._originalViewTransform = backupState.originalViewTransform;
-    canvas.value.requestRenderAll();
-
-    // 🔧 创建临时克隆 canvas，与 exportDesign 保持一致
-    const tempCanvas = document.createElement("canvas");
-    const clonedCanvas = new fabric.Canvas(tempCanvas, {
-      width: canvas.value.getWidth(),
-      height: canvas.value.getHeight(),
-    });
-
-    // 🔧 收集图片信息
-    const imageFileNames = canvas.value
-      .getObjects()
-      .filter((obj) => obj.type === "image" && obj.originalFileName)
-      .map((obj) => obj.originalFileName);
-
-    console.log(`🔍 找到 ${imageFileNames.length} 个图片文件:`, imageFileNames);
-
-    await new Promise((resolve) => {
-      clonedCanvas.loadFromJSON(json, () => {
-        clonedCanvas.renderAll();
-        resolve();
-      });
-    });
-
-    // 🔧 关键修复：计算实际内容边界
-    const contentBounds = getCanvasContentBounds(clonedCanvas);
-
-    // 💡 关键修改：生成字体样式
-    const usedFontNames = getUsedFonts(clonedCanvas);
-    const fontUrlMap = new Map(fontOptions.map((f) => [f.name, f.url]));
-    const fontStyles = generateFontStylesForSVG(usedFontNames, fontUrlMap);
-
-    // 🔧 生成原始SVG
-    const originalSVG = clonedCanvas.toSVG({
-      suppressPreamble: false,
-      viewBox: {
-        x: contentBounds.left,
-        y: contentBounds.top,
-        width: contentBounds.width,
-        height: contentBounds.height,
-      },
-      width: contentBounds.width,
-      height: contentBounds.height,
-    });
-
-    // 💡 关键修改：生成 SVG 后，直接调用 fixClipPathInSVGMarkup 函数
-    let fixedSVG = fixClipPathInSVGMarkup(originalSVG);
-
-    // 💡 关键修改：在 SVG 字符串中插入字体样式
-    let finalSVG = fixedSVG;
-    if (fontStyles) {
-      finalSVG = finalSVG.replace(/<svg[^>]*>/, (match) => {
-        return `${match}\n${fontStyles}`;
-      });
-    }
-
-    // 💡 本地保存：保持 base64 内嵌格式，确保文件自包含
-    console.log("💾 本地保存模式：保持图片 base64 内嵌格式");
-
-    // ✅ 加入英寸单位 - 使用内容尺寸
-    const finalSVGWithSize = addSizedSVGAttributes(
-      finalSVG,
-      contentBounds.width,
-      contentBounds.height,
-      "in",
-      detectedDPI.value
-    );
-
-    // 💾 本地保存：保持原始JSON格式（包含base64）
-    console.log("💾 保持JSON原始格式（包含base64图片数据）");
-    let processedJSON = JSON.stringify(json, null, 2);
-
-    // 🔧 验证本地保存格式
-    const jsonHasBase64 = processedJSON.includes("base64");
-    const svgHasBase64 = finalSVGWithSize.includes("base64");
-    console.log(
-      `🔍 本地保存验证: JSON包含base64=${jsonHasBase64}, SVG包含base64=${svgHasBase64}`
-    );
-
-    // 🔧 清理临时 canvas
-    clonedCanvas.dispose();
-
-    // 💡 下载文件
-    downloadBlob(
-      new Blob([finalSVGWithSize], { type: "image/svg+xml" }),
-      "design.svg"
-    );
-    downloadBlob(
-      new Blob([processedJSON], { type: "application/json" }),
-      "data.json"
-    );
-  } catch (error) {
-    console.error("保存失败:", error);
-    alert("保存失败！");
-  } finally {
-    isLoading.value = false;
   }
 }
 

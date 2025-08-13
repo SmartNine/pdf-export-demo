@@ -222,7 +222,17 @@ class ColorManager {
       iccProfile = "Japan Color 2001 Coated",
       quality = 95,
       method = "auto",
+      targetDPI, // 🔧 确保这里也有 targetDPI 参数
     } = options;
+
+    // 🔧 添加参数验证
+    if (!targetDPI || targetDPI <= 0) {
+      throw new Error(`targetDPI参数无效: ${targetDPI}，必须传入有效的DPI值`);
+    }
+
+    console.log(
+      `🎨 专业CMYK转换: ${iccProfile}, 质量: ${quality}, DPI: ${targetDPI}`
+    );
 
     const tools = await this.checkColorTools();
     const profilePath = this.checkICCProfile(iccProfile);
@@ -231,8 +241,15 @@ class ColorManager {
     const conversionMethods = [
       () => this.convertWithJpgicc(inputPdf, outputPdf, profilePath),
       () =>
-        this.convertWithImageMagick(inputPdf, outputPdf, profilePath, quality),
-      () => this.convertWithGhostscript(inputPdf, outputPdf, quality),
+        this.convertWithImageMagick(
+          inputPdf,
+          outputPdf,
+          profilePath,
+          quality,
+          targetDPI
+        ),
+      () =>
+        this.convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI),
     ];
 
     for (const convertMethod of conversionMethods) {
@@ -255,14 +272,21 @@ class ColorManager {
   }
 
   // 🔧 改进：ImageMagick CMYK转换 - 保持图像清晰度
-  async convertWithImageMagick(inputPdf, outputPdf, iccProfile, quality) {
+  async convertWithImageMagick(
+    inputPdf,
+    outputPdf,
+    iccProfile,
+    quality,
+    targetDPI = 72
+  ) {
     const magickInfo = this.availableTools.imagemagick;
     if (!magickInfo.available) {
       throw new Error("ImageMagick不可用");
     }
 
     // 🔧 改进：更精确的转换参数，保持图像质量
-    let command = `${magickInfo.command} -density 300 "${inputPdf}"`; // 🔧 高DPI输入
+    let command = `${magickInfo.command} -density ${targetDPI} "${inputPdf}"`;
+    console.log(`🔧 使用输入DPI: ${targetDPI} 读取PDF`);
 
     // 🔧 关键改进：指定源和目标配置文件
     const srgbProfile = this.checkICCProfile("sRGB");
@@ -288,7 +312,7 @@ class ColorManager {
     command += ` -unsharp 0.25x0.25+8+0.065`; // 🔧 轻微锐化
     command += ` -quality ${quality}`;
     command += ` -compress jpeg`;
-    command += ` -density 300`; // 🔧 输出DPI
+    command += ` -density ${targetDPI}`; // 🔧 使用传递的DPI
     command += ` "${outputPdf}"`;
 
     console.log(`📝 高质量ImageMagick命令: ${command}`);
@@ -371,7 +395,7 @@ class ColorManager {
   }
 
   // 🔧 改进：Ghostscript回退方案 - 保持高质量图像
-  async convertWithGhostscript(inputPdf, outputPdf, quality) {
+  async convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI = 72) {
     // 🔧 改进：使用专业的Ghostscript CMYK转换参数
     const japanProfile = this.checkICCProfile("Japan Color 2001 Coated");
     const srgbProfile = this.checkICCProfile("sRGB");
@@ -385,9 +409,14 @@ class ColorManager {
     command += ` -dConvertImagesToIndexed=false`;
 
     // 🔧 新增：高质量图像设置
-    command += ` -dColorImageResolution=300`;
-    command += ` -dGrayImageResolution=300`;
-    command += ` -dMonoImageResolution=1200`;
+    command += ` -dColorImageResolution=${targetDPI}`;
+    command += ` -dGrayImageResolution=${targetDPI}`;
+    command += ` -dMonoImageResolution=${targetDPI * 4}`; // 🔧 单色图像通常用4倍DPI
+
+    console.log(
+      `🔧 Ghostscript图像分辨率: 彩色/灰度=${targetDPI}, 单色=${targetDPI * 4}`
+    );
+
     command += ` -dColorImageDownsampleType=/Bicubic`; // 高质量重采样
     command += ` -dGrayImageDownsampleType=/Bicubic`;
     command += ` -dColorImageFilter=/DCTEncode`; // JPEG压缩

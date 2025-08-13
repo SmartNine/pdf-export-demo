@@ -15,9 +15,10 @@ const router = express.Router();
 async function convertToCMYKWithImageMagick(
   inputPdf,
   outputPdf,
-  iccProfilePath
+  iccProfilePath,
+  targetDPI
 ) {
-  console.log("🎨 使用专业色彩管理转换CMYK...");
+  console.log(`🎨 使用专业色彩管理转换CMYK，目标DPI: ${targetDPI}...`);
 
   // 使用ColorManager的专业转换
   const result = await colorManager.convertPDFToCMYKProfessional(
@@ -26,6 +27,7 @@ async function convertToCMYKWithImageMagick(
     {
       iccProfile: "Japan Color 2001 Coated",
       quality: 95,
+      targetDPI: targetDPI, // 🔧 传递实际的DPI值
     }
   );
 
@@ -44,7 +46,7 @@ async function preprocessUploadedImage(filePath, originalname) {
 
     // 使用专业图片预处理
     const processedBuffer = await colorManager.preprocessImage(originalBuffer, {
-      maxPixels: 15000,
+      maxPixels: 50000000, // 🔧 从默认值改为50M像素，保持印刷质量
       processImage: true,
       targetColorSpace: "srgb",
     });
@@ -220,7 +222,9 @@ async function handleSingleRegionExport(
   // 🔧 使用专业CMYK转换
   const cmykResult = await convertToCMYKWithImageMagick(
     finalPdfPath,
-    cmykPdfPath
+    cmykPdfPath,
+    null, // 🔧 明确表示不使用外部ICC文件路径
+    detectedDPI
   );
 
   // 处理其他文件
@@ -291,6 +295,11 @@ async function handleMultiRegionExport(
   const regionCount = parseInt(req.body.regionCount) || 0;
   console.log(`🔢 处理 ${regionCount} 个区域的导出`);
 
+  // 🔧 仅新增这三行获取DPI：
+  const detectedDPI = parseInt(req.body.detectedDPI) || 72;
+  const sourceRegion = req.body.sourceRegion;
+  console.log(`📐 使用原始DPI: ${detectedDPI}, 来源区域: ${sourceRegion}`);
+
   const regionResults = [];
   const allConversionResults = [];
 
@@ -333,24 +342,24 @@ async function handleMultiRegionExport(
     try {
       // SVG -> PDF
       await new Promise((resolve, reject) => {
-        exec(
-          `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing`,
-          (error, stdout, stderr) => {
-            if (error) {
-              console.error(`❌ 区域 ${regionId} Inkscape转换失败:`, stderr);
-              reject(error);
-            } else {
-              console.log(`✅ 区域 ${regionId} PDF转换完成`);
-              resolve();
-            }
+        const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI}`;
+        exec(inkscapeCmd, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`❌ 区域 ${regionId} Inkscape转换失败:`, stderr);
+            reject(error);
+          } else {
+            console.log(`✅ 区域 ${regionId} PDF转换完成`);
+            resolve();
           }
-        );
+        });
       });
 
       // 🔧 专业CMYK转换
       const cmykResult = await convertToCMYKWithImageMagick(
         regionPdfPath,
-        regionCmykPdfPath
+        regionCmykPdfPath,
+        null, // 🔧 明确表示不使用外部ICC文件路径
+        detectedDPI
       );
       allConversionResults.push(cmykResult);
 
@@ -406,6 +415,12 @@ async function handleMultiRegionExport(
     conversionMethods: methods,
     iccProfile: iccProfileName,
     regions: regionResults,
+    // 🔧 仅新增这个字段：
+    dpiInfo: {
+      detected: req.body.detectedDPI,
+      used: detectedDPI,
+      source: sourceRegion,
+    },
     download: {
       zip: `/exports/${taskId}.zip`,
       preview: `/exports/${taskId}/preview.png`,
