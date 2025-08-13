@@ -196,7 +196,6 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               customType: "uv_clipPath",
               id: `${regionId}_clipPath`,
               uvRegionId: regionId,
-              excludeFromExport: true,
             });
 
             // 🆕 新增：创建可选的可视化边界（用户可以控制显示/隐藏）
