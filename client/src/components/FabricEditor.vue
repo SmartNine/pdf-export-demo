@@ -24,6 +24,18 @@
       </label>
     </div>
 
+    <div class="border-toggle">
+      <label>
+        <input
+          type="checkbox"
+          v-model="showUVBorders"
+          @change="toggleUVBorders"
+          :disabled="isLoading"
+        />
+        显示UV区域边界
+      </label>
+    </div>
+
     <input
       type="file"
       accept="image/*"
@@ -174,6 +186,18 @@ const selectedImageRegion = ref("");
 const availableRegions = ref([]);
 
 const detectedDPI = ref(72); // 在组件顶部添加这个reactive变量
+const showUVBorders = ref(true); // 默认显示边界
+
+function toggleUVBorders() {
+  if (!canvas.value) return;
+
+  canvas.value.getObjects().forEach((obj) => {
+    if (obj.customType === "uv_visualBorder") {
+      obj.visible = showUVBorders.value;
+    }
+  });
+  canvas.value.requestRenderAll();
+}
 
 // 🆕 获取可用的UV区域列表
 function updateAvailableRegions() {
@@ -1673,16 +1697,18 @@ function prepareExportObjects(canvas) {
       obj.setCoords();
     }
 
-    // 🔧 处理UV区域 - 标记为不导出而不是修改样式
+    // 🔧 处理UV区域 - 隐藏填充色但保留轮廓
     if (obj.isUvRegion) {
       hiddenObjects.push({
         obj: obj,
         originalSettings: {
-          excludeFromExport: obj.excludeFromExport,
+          fill: obj.fill,
+          opacity: obj.opacity,
         },
       });
       obj.set({
-        excludeFromExport: true,
+        fill: "transparent", // 🔧 导出时移除填充色
+        opacity: 1, // 🔧 确保轮廓可见
       });
     }
 
@@ -1699,25 +1725,29 @@ function prepareExportObjects(canvas) {
       });
     }
 
-    // 🔧 重要：隐形边界对象始终参与导出，不做任何修改
-    // if (obj.customType === "uv_boundary") {
-    //   // 不做任何处理，让它正常参与导出
-    // }
-
-    // 处理辅助线 - 根据复选框状态决定是否导出
-    if (obj.customType && lineVisibility[obj.customType] !== undefined) {
+    // 🔧 处理可视化边界 - 导出时隐藏
+    if (obj.customType === "uv_visualBorder") {
       hiddenObjects.push({
         obj: obj,
         originalSettings: {
           excludeFromExport: obj.excludeFromExport,
         },
       });
+      obj.set({
+        excludeFromExport: true,
+      });
+    }
 
-      if (!lineVisibility[obj.customType]) {
-        obj.set({ excludeFromExport: true });
-      } else {
-        obj.set({ excludeFromExport: false });
-      }
+    // 🔧 处理所有辅助线 - 始终不导出
+    if (
+      obj.customType &&
+      (obj.customType.includes("bleed") ||
+        obj.customType.includes("trim") ||
+        obj.customType.includes("safe") ||
+        obj.customType.includes("fold"))
+    ) {
+      // 🔧 无需存储原始状态，直接设为不导出
+      obj.set({ excludeFromExport: true });
     }
   });
 
@@ -1918,5 +1948,11 @@ select:disabled {
   padding: 5px;
   border: 1px solid #ddd;
   border-radius: 4px;
+}
+
+.border-toggle {
+  display: flex;
+  gap: 12px;
+  margin: 10px 0;
 }
 </style>

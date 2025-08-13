@@ -51,6 +51,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [8, 4],
                 customType: "bleed",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             } else if (id.includes("safe")) {
               obj.set({
@@ -58,12 +59,14 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [5, 5],
                 customType: "safe",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             } else if (id.includes("trim")) {
               obj.set({
                 stroke: "gray",
                 customType: "trim",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             } else if (id.includes("fold")) {
               obj.set({
@@ -71,6 +74,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeDashArray: [4, 4],
                 customType: "fold",
                 fill: "transparent",
+                excludeFromExport: true,
               });
             }
 
@@ -152,7 +156,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 strokeWidth: 0.5,
                 opacity: 0.2,
                 customType: "uv_guide",
-                // excludeFromExport: true,
+                excludeFromExport: true,
               });
             }
 
@@ -179,27 +183,40 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               `🔧 创建区域 ${regionId} 的clipPath，路径数据长度: ${mergedPathData.length}`
             );
 
-            // 创建该区域的clipPath
+            // 🔧 修改：创建纯粹的剪切路径（不可见）
             const uvClipPath = new fabric.Path(mergedPathData, {
               absolutePositioned: true,
               visible: true,
               selectable: false,
               evented: false,
-              fill: "rgba(248,248,248,0.3)", // 🔧 半透明填充，便于查看效果
+              fill: "rgba(248,248,248,1)",
               stroke: "#888",
               strokeWidth: 1,
-              opacity: 0.8, // 🔧 稍微透明，便于看到下方内容
+              opacity: 1,
               customType: "uv_clipPath",
               id: `${regionId}_clipPath`,
-              uvRegionId: regionId, // 🆕 标记所属区域
+              uvRegionId: regionId,
+              excludeFromExport: true,
             });
 
-            // 🔧 确保路径正确设置
-            if (uvClipPath.path) {
-              uvClipPath._setPath(uvClipPath.path);
-            }
+            // 🆕 新增：创建可选的可视化边界（用户可以控制显示/隐藏）
+            const uvVisualBorder = new fabric.Path(mergedPathData, {
+              absolutePositioned: true,
+              visible: true, // 🔧 默认可见，但用户可以控制
+              selectable: false,
+              evented: false,
+              fill: "transparent", // 🔧 无填充，不影响图片
+              stroke: "#888", // 🔧 只有边框线
+              strokeWidth: 1,
+              strokeDashArray: [5, 5], // 🔧 虚线边框，更好区分
+              opacity: 1, // 🔧 完全不透明的边框
+              customType: "uv_visualBorder",
+              id: `${regionId}_visualBorder`,
+              uvRegionId: regionId,
+              excludeFromExport: true, // 🔧 导出时排除
+            });
 
-            // 创建该区域的隐形边界对象
+            // 创建该区域的隐形边界对象（用于导出）
             const invisibleBoundary = new fabric.Path(mergedPathData, {
               absolutePositioned: true,
               visible: false, // 🔧 设为不可见，避免干扰视觉
@@ -211,16 +228,21 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               opacity: 0,
               customType: "uv_boundary",
               id: `${regionId}_boundary`,
-              uvRegionId: regionId, // 🆕 标记所属区域
-              excludeFromExport: false,
+              uvRegionId: regionId,
+              excludeFromExport: false, // 🔧 确保参与导出
             });
 
-            // 🔧 确保边界对象的路径正确设置
-            if (invisibleBoundary.path) {
-              invisibleBoundary._setPath(invisibleBoundary.path);
-            }
+            // 🔧 确保所有路径正确设置
+            [uvClipPath, uvVisualBorder, invisibleBoundary].forEach(
+              (pathObj) => {
+                if (pathObj.path) {
+                  pathObj._setPath(pathObj.path);
+                }
+              }
+            );
 
             processedObjects.push(uvClipPath);
+            processedObjects.push(uvVisualBorder);
             processedObjects.push(invisibleBoundary);
           });
 
