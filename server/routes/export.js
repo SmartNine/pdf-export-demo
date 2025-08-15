@@ -11,29 +11,70 @@ const archiver = require("archiver");
 
 const router = express.Router();
 
-// 🔧 替换你原有的convertToCMYKWithImageMagick函数
 async function convertToCMYKWithImageMagick(
   inputPdf,
   outputPdf,
-  iccProfilePath,
+  iccProfileName,
   targetDPI
 ) {
-  console.log(`🎨 使用专业色彩管理转换CMYK，目标DPI: ${targetDPI}...`);
+  console.log(
+    `🎨 开始专业CMYK转换，目标DPI: ${targetDPI}，ICC: ${iccProfileName}`
+  );
 
-  // 使用ColorManager的专业转换
+  const actualProfileName = iccProfileName || "Japan Color 2001 Coated";
+
   const result = await colorManager.convertPDFToCMYKProfessional(
     inputPdf,
     outputPdf,
     {
-      iccProfile: "Japan Color 2001 Coated",
+      iccProfile: actualProfileName,
       quality: 95,
-      targetDPI: targetDPI, // 🔧 传递实际的DPI值
+      targetDPI: targetDPI,
     }
   );
 
-  // 保持与原有代码的兼容性
-  if (!result.success) {
-    console.error("❌ 专业CMYK转换失败:", result.error);
+  // 🔧 新增：验证转换结果
+  if (result.success) {
+    try {
+      console.log("🔍 验证转换后的PDF色彩空间...");
+      const validation = await colorManager.validateColorSpace(outputPdf);
+
+      // 🔧 新增：像素级验证
+      console.log("🔬 进行像素级色彩验证...");
+      const pixelValidation = await colorManager.validateColorSpaceByPixel(
+        outputPdf
+      );
+
+      if (pixelValidation.success) {
+        console.log(`✅ 像素级验证: ${pixelValidation.colorSpace}`);
+        console.log(`🎨 样本像素值: ${pixelValidation.pixelValue}`);
+
+        result.pixelValidation = {
+          colorSpace: pixelValidation.colorSpace,
+          samplePixel: pixelValidation.pixelValue,
+          confidence: pixelValidation.confidence,
+        };
+      }
+
+      if (validation.success) {
+        console.log(
+          `✅ 验证结果: ${validation.colorSpace} (置信度: ${(
+            validation.confidence * 100
+          ).toFixed(1)}%)`
+        );
+
+        result.validatedColorSpace = validation.colorSpace;
+        result.validationConfidence = validation.confidence;
+        result.validationSummary = validation.summary;
+
+        if (validation.colorSpace !== "CMYK") {
+          console.warn("⚠️ 警告：PDF仍为RGB色彩空间，可能需要检查ICC配置");
+          result.conversionWarning = "转换后仍为RGB色彩空间";
+        }
+      }
+    } catch (validationError) {
+      console.warn("⚠️ 验证失败:", validationError.message);
+    }
   }
 
   return result;
@@ -185,6 +226,8 @@ async function handleSingleRegionExport(
   exportDir,
   iccProfileName
 ) {
+  const detectedDPI = parseInt(req.body.detectedDPI) || 72;
+
   if (!req.files["design"] || req.files["design"].length === 0) {
     throw new Error("设计文件缺失");
   }
@@ -223,7 +266,7 @@ async function handleSingleRegionExport(
   const cmykResult = await convertToCMYKWithImageMagick(
     finalPdfPath,
     cmykPdfPath,
-    null, // 🔧 明确表示不使用外部ICC文件路径
+    iccProfileName,
     detectedDPI
   );
 
@@ -358,7 +401,7 @@ async function handleMultiRegionExport(
       const cmykResult = await convertToCMYKWithImageMagick(
         regionPdfPath,
         regionCmykPdfPath,
-        null, // 🔧 明确表示不使用外部ICC文件路径
+        iccProfileName,
         detectedDPI
       );
       allConversionResults.push(cmykResult);

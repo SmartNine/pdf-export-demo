@@ -1324,9 +1324,28 @@ async function sendMultiRegionExportRequest(regionExports) {
 
   if (result.success) {
     zipDownloadUrl.value = getBackendUrl(result.download.zip);
-    alert(`✅ 成功生成 ${regionExports.length} 个区域的PDF文件！`);
-  } else {
-    alert("分区域导出失败，请检查服务器日志");
+
+    // 🔧 增强显示验证信息
+    let alertMessage = `✅ 成功生成 ${regionExports.length} 个区域的PDF文件！`;
+
+    // 显示像素级验证结果
+    if (result.pixelValidation) {
+      alertMessage += `\n🎨 色彩验证: ${result.pixelValidation.colorSpace}色彩空间`;
+      alertMessage += `\n🔬 像素分析: ${result.pixelValidation.samplePixel}`;
+
+      if (result.pixelValidation.colorSpace === "CMYK") {
+        alertMessage += `\n✅ CMYK转换成功，可用于专业印刷`;
+      }
+    } else if (result.validatedColorSpace) {
+      alertMessage += `\n🎨 验证结果: ${result.validatedColorSpace}`;
+      if (result.validationConfidence) {
+        alertMessage += ` (置信度: ${(
+          result.validationConfidence * 100
+        ).toFixed(1)}%)`;
+      }
+    }
+
+    alert(alertMessage);
   }
 }
 // 分页导出

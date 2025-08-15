@@ -133,20 +133,53 @@ class ColorManager {
   }
 
   // 🔧 移植canvas.js的CMYK处理逻辑
-  async convertCMYKImageProfessionally(context, originalBuffer) {
-    const tools = await this.checkColorTools();
+  // 在 colorManager.js 中添加
+  async convertCMYKImageProfessionally(imageBuffer) {
+    const { format, space } = await sharp(imageBuffer).metadata();
 
-    if (tools.jpgicc) {
-      // 方法1: 使用jpgicc（最专业）
-      return await this.convertCMYKWithJpgicc(originalBuffer);
-    } else if (tools.imagemagick) {
-      // 方法2: 使用ImageMagick
-      return await this.convertCMYKWithImageMagick(originalBuffer);
-    } else {
-      // 方法3: Sharp内置转换（基础）
-      console.warn("⚠️ 缺少专业CMYK工具，使用基础转换");
-      return await context.toColorspace("srgb").toBuffer();
+    if (format === "jpeg" && space === "cmyk") {
+      console.log("🎨 检测到CMYK图片，使用jpgicc专业转换");
+
+      const tmpDir = require("os").tmpdir();
+      const inputPath = path.join(tmpDir, `cmyk_input_${Date.now()}.jpg`);
+      const outputPath = path.join(tmpDir, `srgb_output_${Date.now()}.jpg`);
+
+      try {
+        // 写入临时文件
+        fs.writeFileSync(inputPath, imageBuffer);
+
+        // 🔧 使用您现有的ICC文件
+        const cmykProfile = this.checkICCProfile("Japan Color 2001 Coated");
+        const srgbProfile = this.checkICCProfile("sRGB");
+
+        const jpgiccArgs = [
+          "-i",
+          cmykProfile, // 输入：日本印刷标准
+          "-o",
+          srgbProfile, // 输出：sRGB标准
+          inputPath,
+          outputPath,
+        ];
+
+        const result = spawnSync("jpgicc", jpgiccArgs);
+
+        if (result.error) {
+          throw new Error(`jpgicc转换失败: ${result.stderr?.toString()}`);
+        }
+
+        const convertedBuffer = fs.readFileSync(outputPath);
+        console.log("✅ jpgicc CMYK→sRGB转换成功");
+
+        return convertedBuffer;
+      } finally {
+        // 清理临时文件
+        [inputPath, outputPath].forEach((file) => {
+          if (fs.existsSync(file)) fs.unlinkSync(file);
+        });
+      }
     }
+
+    return imageBuffer; // 非CMYK图片直接返回
   }
 
   // 🔧 移植canvas.js的jpgicc处理（简化版）
@@ -237,9 +270,8 @@ class ColorManager {
     const tools = await this.checkColorTools();
     const profilePath = this.checkICCProfile(iccProfile);
 
-    // 🔧 移植canvas.js的多种转换方法和回退机制
+    // 🔧 调整转换优先级，ImageMagick在有ICC支持的情况下更可靠
     const conversionMethods = [
-      () => this.convertWithJpgicc(inputPdf, outputPdf, profilePath),
       () =>
         this.convertWithImageMagick(
           inputPdf,
@@ -247,9 +279,9 @@ class ColorManager {
           profilePath,
           quality,
           targetDPI
-        ),
+        ), // 🔧 首选：有ICC支持
       () =>
-        this.convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI),
+        this.convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI), // 备选：基础CMYK
     ];
 
     for (const convertMethod of conversionMethods) {
@@ -284,35 +316,41 @@ class ColorManager {
       throw new Error("ImageMagick不可用");
     }
 
-    // 🔧 改进：更精确的转换参数，保持图像质量
     let command = `${magickInfo.command} -density ${targetDPI} "${inputPdf}"`;
-    console.log(`🔧 使用输入DPI: ${targetDPI} 读取PDF`);
 
-    // 🔧 关键改进：指定源和目标配置文件
-    const srgbProfile = this.checkICCProfile("sRGB");
+    // 🔧 使用明确的ICC文件路径，避免动态查找
+    const srgbProfile = path.join(__dirname, "../icc-profiles/sRGB.icc");
+    const cmykProfile = path.join(
+      __dirname,
+      "../icc-profiles/JapanColor2001Coated.icc"
+    );
 
-    if (srgbProfile && iccProfile && fs.existsSync(iccProfile)) {
-      // 方法1：双配置文件转换（最精确）
-      command += ` -profile "${srgbProfile}" -profile "${iccProfile}"`;
-      console.log(`✅ 使用双配置文件转换: sRGB → ${path.basename(iccProfile)}`);
-    } else if (iccProfile && fs.existsSync(iccProfile)) {
-      // 方法2：只有目标配置文件
-      command += ` -colorspace sRGB -profile "${iccProfile}"`;
-      console.log(`✅ 使用目标配置文件: ${path.basename(iccProfile)}`);
+    // 🔧 在现有命令基础上，增加强制CMYK元数据写入
+    if (fs.existsSync(srgbProfile) && fs.existsSync(cmykProfile)) {
+      console.log("✅ 使用固定ICC配置文件路径");
+      command += ` -profile "${srgbProfile}"`;
+      command += ` -profile "${cmykProfile}"`;
+      command += ` -colorspace CMYK`;
+      command += ` -define pdf:use-cmyk=true`;
+
+      // 🔧 新增：强制写入CMYK元数据
+      command += ` -set colorspace CMYK`;
+      command += ` -define pdf:colorspace=cmyk`;
+      command += ` -define pdf:compression=jpeg`;
+      command += ` -define pdf:preserve-colorspace=true`;
+      command += ` -type ColorSeparation`; // 强制色彩分离模式
     } else {
-      // 方法3：标准CMYK转换
-      command += ` -colorspace cmyk`;
-      console.log(`⚠️ 使用标准CMYK转换`);
+      console.warn("⚠️ ICC配置文件不存在，使用基础转换");
+      command += ` -colorspace CMYK`;
+      command += ` -set colorspace CMYK`;
+      command += ` -define pdf:use-cmyk=true`;
     }
 
-    // 🔧 改进：保持图像质量的设置
-    command += ` -intent Perceptual`; // 感知渲染意图
-    command += ` -interpolate catrom`; // 🔧 高质量插值算法
-    command += ` -filter Lanczos`; // 🔧 高质量滤镜
-    command += ` -unsharp 0.25x0.25+8+0.065`; // 🔧 轻微锐化
+    // 保持原有的高质量设置
+    command += ` -intent Perceptual`;
     command += ` -quality ${quality}`;
     command += ` -compress jpeg`;
-    command += ` -density ${targetDPI}`; // 🔧 使用传递的DPI
+    command += ` -density ${targetDPI}`;
     command += ` "${outputPdf}"`;
 
     console.log(`📝 高质量ImageMagick命令: ${command}`);
@@ -394,97 +432,398 @@ class ColorManager {
     });
   }
 
-  // 🔧 改进：Ghostscript回退方案 - 保持高质量图像
   async convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI = 72) {
-    // 🔧 改进：使用专业的Ghostscript CMYK转换参数
-    const japanProfile = this.checkICCProfile("Japan Color 2001 Coated");
-    const srgbProfile = this.checkICCProfile("sRGB");
-
+    // 🔧 针对无ICC支持的Ghostscript简化命令
     let command = `gs -sDEVICE=pdfwrite -dNOPAUSE -dBATCH -dSAFER`;
     command += ` -dCompatibilityLevel=1.4`;
-    command += ` -dPDFSETTINGS=/prepress`; // 🔧 改进：使用预印刷设置
+
+    // 🔧 只使用基础CMYK设置，不涉及ICC
     command += ` -dColorConversionStrategy=CMYK`;
     command += ` -dProcessColorModel=/DeviceCMYK`;
     command += ` -dConvertCMYKImagesToRGB=false`;
     command += ` -dConvertImagesToIndexed=false`;
 
-    // 🔧 新增：高质量图像设置
+    // 🔧 移除所有ICC相关参数
+    // ❌ command += ` -sDefaultCMYKProfile="${japanProfile}"`;  // 这会失败
+    // ❌ command += ` -sOutputICCProfile="${japanProfile}"`;     // 这会失败
+
+    // 基础图像设置
     command += ` -dColorImageResolution=${targetDPI}`;
     command += ` -dGrayImageResolution=${targetDPI}`;
-    command += ` -dMonoImageResolution=${targetDPI * 4}`; // 🔧 单色图像通常用4倍DPI
-
-    console.log(
-      `🔧 Ghostscript图像分辨率: 彩色/灰度=${targetDPI}, 单色=${targetDPI * 4}`
-    );
-
-    command += ` -dColorImageDownsampleType=/Bicubic`; // 高质量重采样
-    command += ` -dGrayImageDownsampleType=/Bicubic`;
-    command += ` -dColorImageFilter=/DCTEncode`; // JPEG压缩
-    command += ` -dGrayImageFilter=/DCTEncode`;
-    command += ` -dColorImageDict='<< /Quality ${quality} /HSamples [1 1 1 1] /VSamples [1 1 1 1] >>'`;
-
-    // 🔧 关键改进：禁用自动图像缩放
     command += ` -dAutoFilterColorImages=false`;
-    command += ` -dAutoFilterGrayImages=false`;
-    command += ` -dEncodeColorImages=true`;
-    command += ` -dEncodeGrayImages=true`;
+    command += ` -dColorImageFilter=/DCTEncode`;
+    command += ` -dColorImageDict='<< /Quality ${quality} >>'`;
 
-    // 🔧 改进：使用ICC配置文件
-    if (japanProfile) {
-      command += ` -sDefaultCMYKProfile="${japanProfile}"`;
-      console.log(
-        `✅ Ghostscript使用CMYK配置文件: ${path.basename(japanProfile)}`
-      );
-    }
-
-    if (srgbProfile) {
-      command += ` -sDefaultRGBProfile="${srgbProfile}"`;
-      console.log(
-        `✅ Ghostscript使用RGB配置文件: ${path.basename(srgbProfile)}`
-      );
-    }
-
-    // 🔧 改进：渲染意图和矢量保持
-    command += ` -dRenderIntent=1`; // 1 = Perceptual
-    command += ` -dPreserveEPSInfo=false`;
-    command += ` -dPreserveOPIComments=false`;
-    command += ` -dOptimize=true`;
     command += ` -sOutputFile="${outputPdf}" "${inputPdf}"`;
 
-    console.log(`📝 高质量Ghostscript命令: ${command}`);
+    console.log(`📝 基础Ghostscript命令(无ICC): ${command}`);
 
     return new Promise((resolve, reject) => {
       exec(command, (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(`Ghostscript转换失败: ${stderr}`));
+          console.error(`❌ Ghostscript错误: ${error.message}`);
+          console.error(`❌ stderr: ${stderr}`);
+          reject(new Error(`Ghostscript转换失败: ${stderr || error.message}`));
         } else {
+          console.log(`✅ Ghostscript基础CMYK转换成功`);
           resolve({
             success: true,
             usedCMYK: true,
-            usedICC: !!japanProfile,
-            method: "Ghostscript High-Quality",
+            usedICC: false, // 🔧 明确标记未使用ICC
+            method: "Ghostscript Basic CMYK",
           });
         }
       });
     });
   }
 
-  // 🔧 新增：色彩验证工具
   async validateColorSpace(pdfPath) {
+    console.log(`🔍 开始验证PDF色彩空间: ${pdfPath}`);
+
+    const validationMethods = [
+      {
+        name: "pixel-analysis",
+        method: () => this.validateColorSpaceByPixel(pdfPath),
+      }, // 🔧 新增首选验证
+      { name: "exiftool", method: () => this.validateWithExiftool(pdfPath) },
+      { name: "identify", method: () => this.validateWithIdentify(pdfPath) },
+      {
+        name: "ghostscript",
+        method: () => this.validateWithGhostscript(pdfPath),
+      },
+    ];
+
+    const results = [];
+
+    for (const { name, method } of validationMethods) {
+      try {
+        console.log(`🔍 尝试验证方法: ${name}`);
+        const result = await method();
+        if (result.success && !isNaN(result.confidence)) {
+          // 🔧 检查NaN
+          results.push({ method: name, ...result });
+          console.log(
+            `✅ ${name} 验证成功: ${result.colorSpace} (置信度: ${(
+              result.confidence * 100
+            ).toFixed(1)}%)`
+          );
+        }
+      } catch (error) {
+        console.warn(`⚠️ ${name} 验证失败:`, error.message);
+      }
+    }
+
+    if (results.length === 0) {
+      return { success: false, error: "所有验证方法都失败了" };
+    }
+
+    // 🔧 改进权重计算，处理NaN情况
+    const weightedResults = results.map((r) => ({
+      ...r,
+      weight: r.method === "exiftool" ? 2.0 : 1.0,
+      confidence: isNaN(r.confidence) ? 0.5 : r.confidence, // 🔧 处理NaN
+    }));
+
+    const totalWeight = weightedResults.reduce((sum, r) => sum + r.weight, 0);
+    const weightedConfidence =
+      weightedResults.reduce((sum, r) => sum + r.confidence * r.weight, 0) /
+      totalWeight;
+
+    const cmykResults = weightedResults.filter((r) => r.colorSpace === "CMYK");
+    const cmykWeight = cmykResults.reduce((sum, r) => sum + r.weight, 0);
+    const isCMYK = cmykWeight > totalWeight / 2;
+
+    return {
+      success: true,
+      colorSpace: isCMYK ? "CMYK" : "RGB",
+      confidence: isNaN(weightedConfidence) ? 0.5 : weightedConfidence, // 🔧 处理NaN
+      details: results,
+      summary: `${cmykResults.length}/${
+        results.length
+      } 个方法检测为CMYK (总权重: CMYK=${cmykWeight.toFixed(
+        1
+      )}, 总计=${totalWeight.toFixed(1)})`,
+    };
+  }
+
+  // 🔧 新增：使用 pdfimages 验证（最准确的方法）
+  async validateWithPdfImages(pdfPath) {
     const command = `pdfimages -list "${pdfPath}"`;
+
+    return new Promise((resolve, reject) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`pdfimages验证失败: ${stderr}`));
+          return;
+        }
+
+        const lines = stdout.split("\n");
+        let cmykImages = 0;
+        let rgbImages = 0;
+
+        lines.forEach((line) => {
+          if (line.includes("cmyk") || line.includes("CMYK")) {
+            cmykImages++;
+          } else if (
+            line.includes("rgb") ||
+            line.includes("RGB") ||
+            line.includes("gray")
+          ) {
+            rgbImages++;
+          }
+        });
+
+        const totalImages = cmykImages + rgbImages;
+        const isCMYK = cmykImages > 0 && cmykImages >= rgbImages;
+
+        resolve({
+          success: true,
+          colorSpace: isCMYK ? "CMYK" : "RGB",
+          details: {
+            cmykImages,
+            rgbImages,
+            totalImages,
+            rawOutput: stdout,
+          },
+          method: "pdfimages",
+        });
+      });
+    });
+  }
+
+  // 🔧 新增：使用 ImageMagick identify 验证
+  async validateWithIdentify(pdfPath) {
+    const commands = [
+      `identify -verbose "${pdfPath}[0]"`,
+      `identify -format "%[colorspace] %[channels]" "${pdfPath}[0]"`,
+    ];
+
+    const results = [];
+
+    for (const command of commands) {
+      try {
+        const result = await new Promise((resolve, reject) => {
+          exec(command, (error, stdout, stderr) => {
+            if (error) reject(error);
+            else resolve(stdout);
+          });
+        });
+        results.push(result);
+      } catch (error) {
+        console.warn(`identify子命令失败: ${error.message}`);
+      }
+    }
+
+    if (results.length === 0) {
+      throw new Error("所有identify命令都失败了");
+    }
+
+    const combinedOutput = results.join("\n").toLowerCase();
+    let colorSpace = "RGB";
+    let confidence = 0.5; // 🔧 修复：设置默认值，避免NaN
+
+    const cmykIndicators = [
+      "colorspace: cmyk",
+      "devicecmyk",
+      "channels: 4",
+      "cmyk(",
+      "type: cmyk",
+    ];
+
+    const cmykMatches = cmykIndicators.filter((indicator) =>
+      combinedOutput.includes(indicator)
+    ).length;
+
+    if (cmykMatches >= 2) {
+      colorSpace = "CMYK";
+      confidence = Math.min(0.9, 0.6 + cmykMatches * 0.1); // 🔧 确保有效范围
+    } else if (cmykMatches >= 1) {
+      colorSpace = "CMYK";
+      confidence = 0.7;
+    }
+
+    return {
+      success: true,
+      colorSpace,
+      confidence, // 🔧 确保返回有效数值
+      details: {
+        cmykIndicators: cmykMatches,
+        totalChecks: cmykIndicators.length,
+        rawOutput: results[0]?.substring(0, 500),
+      },
+      method: "identify-enhanced",
+    };
+  }
+
+  // 🔧 新增：使用 pdfinfo 验证PDF元数据
+  async validateWithPdfInfo(pdfPath) {
+    const command = `pdfinfo "${pdfPath}"`;
+
+    return new Promise((resolve, reject) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`pdfinfo验证失败: ${stderr}`));
+          return;
+        }
+
+        const output = stdout.toLowerCase();
+        let colorSpace = "RGB"; // 默认
+
+        // 检查PDF元数据中的色彩空间信息
+        if (
+          output.includes("cmyk") ||
+          output.includes("devicecmyk") ||
+          output.includes("separation")
+        ) {
+          colorSpace = "CMYK";
+        }
+
+        resolve({
+          success: true,
+          colorSpace,
+          details: {
+            pdfInfo: stdout,
+            hasCMYKIndicators: output.includes("cmyk"),
+          },
+          method: "pdfinfo",
+        });
+      });
+    });
+  }
+
+  // 🔧 增强 exiftool 验证逻辑
+  async validateWithExiftool(pdfPath) {
+    const command = `exiftool -ColorSpace -Colorants -PrintColorMode -DeviceColorSpace -ICCProfileDescription -ColorComponents "${pdfPath}"`;
+
+    return new Promise((resolve, reject) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`exiftool验证失败: ${stderr}`));
+          return;
+        }
+
+        const output = stdout.toLowerCase();
+        let colorSpace = "RGB";
+        let confidence = 0.7;
+
+        console.log("🔍 exiftool 原始输出:", stdout); // 🔧 调试输出
+
+        // 🔧 更严格的CMYK检测
+        const strongCmykIndicators = [
+          "color space                     : cmyk",
+          "device color space             : cmyk",
+          "icc profile description        : japan color 2001 coated",
+          "color components               : 4",
+        ];
+
+        const weakCmykIndicators = [
+          "colorants                      : cyan",
+          "colorants                      : magenta",
+          "colorants                      : yellow",
+          "colorants                      : black",
+          "print color mode               : cmyk",
+        ];
+
+        const strongMatches = strongCmykIndicators.filter((indicator) =>
+          output.includes(indicator)
+        ).length;
+
+        const weakMatches = weakCmykIndicators.filter((indicator) =>
+          output.includes(indicator)
+        ).length;
+
+        // 🔧 改进判定逻辑
+        if (strongMatches >= 1) {
+          colorSpace = "CMYK";
+          confidence = 0.95;
+        } else if (weakMatches >= 3) {
+          colorSpace = "CMYK";
+          confidence = 0.8;
+        } else if (output.includes("cmyk")) {
+          colorSpace = "CMYK";
+          confidence = 0.6;
+        }
+
+        console.log(
+          `🔍 exiftool 判定: ${colorSpace} (强指标:${strongMatches}, 弱指标:${weakMatches})`
+        );
+
+        resolve({
+          success: true,
+          colorSpace,
+          confidence,
+          details: {
+            strongMatches,
+            weakMatches,
+            hasColorSpaceField: output.includes("color space"),
+            hasDeviceColorSpace: output.includes("device color space"),
+            hasICCProfile: output.includes("icc profile"),
+            rawOutput: stdout,
+          },
+          method: "exiftool",
+        });
+      });
+    });
+  }
+
+  // 🔧 添加缺失的 validateWithGhostscript 函数
+  async validateWithGhostscript(pdfPath) {
+    const command = `gs -q -dNOPAUSE -dBATCH -sDEVICE=inkcov "${pdfPath}" 2>&1`;
+
+    return new Promise((resolve, reject) => {
+      exec(command, (error, stdout, stderr) => {
+        const output = (stdout + stderr).toLowerCase();
+
+        // inkcov 设备会显示每页的墨水覆盖率 (C M Y K)
+        let colorSpace = "RGB";
+        let confidence = 0.6;
+
+        // 检查是否有CMYK墨水覆盖率输出
+        const cmykPattern =
+          /(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+cmyk/;
+        const match = output.match(cmykPattern);
+
+        if (match) {
+          colorSpace = "CMYK";
+          confidence = 0.8;
+        } else if (output.includes("cmyk") || output.includes("devicecmyk")) {
+          colorSpace = "CMYK";
+          confidence = 0.7;
+        }
+
+        resolve({
+          success: true,
+          colorSpace,
+          confidence,
+          details: {
+            hasInkCoverage: !!match,
+            rawOutput: output.substring(0, 300),
+          },
+          method: "ghostscript",
+        });
+      });
+    });
+  }
+
+  // 在colorManager.js中添加真正的像素级验证
+  async validateColorSpaceByPixel(pdfPath) {
+    const command = `magick "${pdfPath}" -format "%[pixel:p{100,100}]" info:`;
 
     return new Promise((resolve) => {
       exec(command, (error, stdout) => {
         if (error) {
           resolve({ success: false, error: error.message });
-        } else {
-          const hasCMYK = stdout.includes("cmyk") || stdout.includes("CMYK");
-          resolve({
-            success: true,
-            colorSpace: hasCMYK ? "CMYK" : "RGB",
-            details: stdout,
-          });
+          return;
         }
+
+        const isCMYK = stdout.includes("cmyk(");
+        resolve({
+          success: true,
+          colorSpace: isCMYK ? "CMYK" : "RGB",
+          confidence: isCMYK ? 1.0 : 0.5,
+          pixelValue: stdout.trim(),
+          method: "pixel-analysis",
+        });
       });
     });
   }
