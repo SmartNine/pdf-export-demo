@@ -798,16 +798,16 @@ function detectSVGDPI(svgContent, knownPhysicalSize = null) {
   // 🔧 针对大型展示产品的DPI推断
   if (maxDimension > 5000) {
     console.log(`🏗️ 大型展示产品尺寸(${maxDimension}px)，推断高分辨率DPI: 300`);
-    return 300;
+    return 72;
   } else if (maxDimension > 2000) {
     console.log(`🏗️ 中型展示产品尺寸(${maxDimension}px)，推断中等DPI: 150`);
-    return 150;
+    return 72;
   } else if (maxDimension > 1000) {
     console.log(`🏗️ 标准展示产品尺寸(${maxDimension}px)，推断标准DPI: 72`);
     return 72;
   } else {
     console.log(`🏗️ 小型产品或图标尺寸(${maxDimension}px)，推断高DPI: 300`);
-    return 300; // 小尺寸可能是高分辨率的小部件
+    return 72; // 小尺寸可能是高分辨率的小部件
   }
 }
 
