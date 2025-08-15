@@ -543,21 +543,144 @@ function onImageUpload(e) {
   input.value = "";
 }
 
-function resizeImage(file, maxSize = 2048) {
-  return new Promise((resolve) => {
+async function processImageForEditing(
+  file,
+  maxSize = 1024,
+  preserveOriginal = true
+) {
+  return new Promise(async (resolve) => {
+    // 🔧 首先检测图片的色彩空间
+    const colorInfo = await detectImageColorSpace(file);
+    console.log("🎨 检测到的色彩信息:", colorInfo);
+
     const img = new Image();
     img.onload = () => {
+      // 🔧 YCCK/CMYK 图片需要特殊处理
+      if (colorInfo.isYCCK || colorInfo.isCMYK) {
+        console.log("⚠️ 检测到CMYK/YCCK图片，将在后端进行专业处理");
+        // 对于CMYK图片，我们传递原始文件给后端处理
+        const reader = new FileReader();
+        reader.onload = () => {
+          resolve({
+            compressed: reader.result,
+            original: {
+              file: file,
+              width: img.naturalWidth || 2000, // 预估尺寸
+              height: img.naturalHeight || 2000,
+              name: file.name,
+              size: file.size,
+            },
+            compressionRatio: 1.0,
+            isHighQuality: true,
+            needsCMYKProcessing: true, // 🔧 标记需要CMYK处理
+            colorInfo: colorInfo,
+          });
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      // RGB图片的正常处理逻辑...
+      const needsCompression = img.width > maxSize || img.height > maxSize;
+
+      if (!needsCompression && preserveOriginal) {
+        // 🔧 小图片或高质量模式：直接使用原始图片
+        console.log(
+          `📷 图片尺寸适中(${img.width}x${img.height})，保持原始质量`
+        );
+        const originalDataUrl = getOriginalImageDataUrl(file);
+
+        resolve({
+          compressed: originalDataUrl, // 实际上是原始图片
+          original: {
+            file: file,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            name: file.name,
+            size: file.size,
+          },
+          compressionRatio: 1.0, // 无压缩
+          isHighQuality: true,
+        });
+        return;
+      }
+
+      // 🔧 需要压缩时，保持更高质量用于印刷品
       const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+
       const canvasEl = document.createElement("canvas");
       canvasEl.width = img.width * scale;
       canvasEl.height = img.height * scale;
 
       const ctx = canvasEl.getContext("2d");
+
+      // 🔧 高质量重采样设置
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+
       ctx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height);
 
-      resolve(canvasEl.toDataURL("image/jpeg", 0.85));
+      // 🔧 印刷品使用更高质量的压缩
+      const quality = 0.95; // 从0.8提升到0.95
+      const compressedDataUrl = canvasEl.toDataURL("image/jpeg", quality);
+
+      resolve({
+        compressed: compressedDataUrl,
+        original: {
+          file: file,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          name: file.name,
+          size: file.size,
+        },
+        compressionRatio: scale,
+        isHighQuality: scale > 0.8, // 压缩比例不大时仍视为高质量
+      });
     };
     img.src = URL.createObjectURL(file);
+  });
+}
+
+// 🔧 新增：检测图片色彩空间
+async function detectImageColorSpace(file) {
+  // 这里可以通过读取文件头信息来快速检测
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result;
+      const uint8Array = new Uint8Array(arrayBuffer);
+
+      // 检查JPEG文件的APP标记段
+      let isYCCK = false;
+      let isCMYK = false;
+
+      // 简单的JPEG标记检测
+      for (let i = 0; i < uint8Array.length - 4; i++) {
+        if (uint8Array[i] === 0xff && uint8Array[i + 1] === 0xee) {
+          // Adobe APP14 marker - 可能包含色彩信息
+          const colorTransform = uint8Array[i + 11];
+          if (colorTransform === 2) {
+            isYCCK = true;
+            isCMYK = true;
+          } else if (colorTransform === 0) {
+            isCMYK = true;
+          }
+          break;
+        }
+      }
+
+      resolve({ isYCCK, isCMYK });
+    };
+    reader.readAsArrayBuffer(file.slice(0, 2048)); // 只读取前2KB检测
+  });
+}
+
+// 🔧 新增：获取原始图片的 Data URL
+function getOriginalImageDataUrl(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
   });
 }
 
@@ -734,50 +857,32 @@ function addSizedSVGAttributes(
 // 目的：导出时使用原始质量的图片而非压缩后的预览图
 async function getOriginalImageBlob(imgObj) {
   try {
-    // 🔧 颜色修复方案：重新处理原始文件以统一色彩空间
+    // 🔧 优先使用原始文件
     if (imgObj.originalFile) {
-      console.log(`📷 处理原始文件: ${imgObj.originalFileName}`);
+      console.log(
+        `📁 使用原始文件: ${imgObj.originalFileName} (${(
+          imgObj.originalFile.size /
+          1024 /
+          1024
+        ).toFixed(2)}MB)`
+      );
 
-      // 🔧 关键修复：使用Canvas重新绘制以统一色彩空间
+      // 直接返回原始文件的blob，不进行任何处理
       return new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement("canvas");
-          const ctx = canvas.getContext("2d");
-
-          // 设置画布尺寸为原始图片尺寸
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-
-          // 🔧 关键：强制使用sRGB色彩空间
-          ctx.drawImage(img, 0, 0);
-
-          // 转换为blob，强制JPEG格式和sRGB
-          canvas.toBlob(
-            (blob) => {
-              console.log(`✅ 颜色空间统一完成: ${imgObj.originalFileName}`);
-              resolve(blob);
-            },
-            "image/jpeg",
-            0.95
-          ); // 高质量JPEG
+        const reader = new FileReader();
+        reader.onload = () => {
+          const arrayBuffer = reader.result;
+          const blob = new Blob([arrayBuffer], {
+            type: imgObj.originalFile.type,
+          });
+          console.log(`✅ 原始文件blob创建成功: ${imgObj.originalFileName}`);
+          resolve(blob);
         };
-
-        img.onerror = () => {
-          console.warn("原始文件加载失败，使用备用方案");
-          // fallback到当前显示的图片
-          if (imgObj._element && imgObj._element.src) {
-            fetch(imgObj._element.src)
-              .then((res) => res.blob())
-              .then(resolve);
-          }
-        };
-
-        img.src = URL.createObjectURL(imgObj.originalFile);
+        reader.readAsArrayBuffer(imgObj.originalFile);
       });
     }
 
-    // 🔧 兜底方案：从当前显示的src获取（可能是压缩后的）
+    // 备用方案：从当前显示的src获取
     if (imgObj._element && imgObj._element.src) {
       console.log(`📷 使用当前显示图片: ${imgObj.originalFileName}`);
       const response = await fetch(imgObj._element.src);
@@ -904,17 +1009,43 @@ async function exportMultipleRegions() {
 
       let finalSVG = fixedSVG;
       imageFileNames.forEach((fileName) => {
-        const relativePath = `../images/${fileName}`; // 🔧 添加 ../
+        const imgObj = regionCanvas
+          .getObjects()
+          .find(
+            (obj) => obj.type === "image" && obj.originalFileName === fileName
+          );
+
+        // 🔧 关键修改：对于CMYK图片，应该引用jpgicc处理后的RGB版本
+        let imagePath;
+        if (
+          imgObj &&
+          (imgObj.needsCMYKProcessing ||
+            imgObj.compressionInfo?.wasCMYKImage ||
+            (imgObj.compressionInfo && imgObj.compressionInfo.isHighQuality))
+        ) {
+          // 使用处理后的版本（jpgicc转换的RGB图片）
+          imagePath = `../images/${fileName}`;
+          console.log(`🔧 使用处理后版本: ${fileName}`);
+        } else {
+          // 使用原始版本
+          imagePath = `../images/originals/${fileName}`;
+          console.log(`📷 使用原始版本: ${fileName}`);
+        }
+
+        // 🔧 简化判断：直接检查文件是否是CMYK转换的 //临时方案
+        imagePath = `../images/${fileName}`; // 🔧 强制使用处理后的版本
+        console.log(`🔧 强制使用处理后版本: ${fileName}`);
+
         const base64Pattern = /href="data:image\/[^;]+;base64,[^"]*"/;
         const xlinkBase64Pattern =
           /xlink:href="data:image\/[^;]+;base64,[^"]*"/;
 
         if (base64Pattern.test(finalSVG)) {
-          finalSVG = finalSVG.replace(base64Pattern, `href="${relativePath}"`);
+          finalSVG = finalSVG.replace(base64Pattern, `href="${imagePath}"`);
         } else if (xlinkBase64Pattern.test(finalSVG)) {
           finalSVG = finalSVG.replace(
             xlinkBase64Pattern,
-            `xlink:href="${relativePath}"`
+            `xlink:href="${imagePath}"`
           );
         }
       });
@@ -940,12 +1071,40 @@ async function exportMultipleRegions() {
       // 处理JSON中的图片路径
       let processedJSON = regionJsonData;
       imageFileNames.forEach((fileName) => {
-        const relativePath = `../images/${fileName}`; // 🔧 添加 ../
+        // 🔧 修改：使用相同的智能路径选择逻辑
+        const imgObj = regionCanvas
+          .getObjects()
+          .find(
+            (obj) => obj.type === "image" && obj.originalFileName === fileName
+          );
+
+        let imagePath;
+
+        // 🔧 修改：优先检查是否是CMYK处理的图片
+        if (
+          imgObj &&
+          (imgObj.needsCMYKProcessing ||
+            imgObj.compressionInfo?.wasCMYKImage ||
+            (imgObj.compressionInfo && imgObj.compressionInfo.isHighQuality))
+        ) {
+          // 使用处理后的版本（jpgicc转换的RGB图片）
+          imagePath = `../images/${fileName}`;
+          console.log(`📋 JSON使用高质量处理版本: ${fileName}`);
+        } else {
+          // 使用原始版本
+          imagePath = `../images/originals/${fileName}`;
+          console.log(`📋 JSON使用原始版本保证印刷质量: ${fileName}`);
+        }
+
+        // 🔧 JSON中也强制使用处理后版本 //临时方案
+        imagePath = `../images/${fileName}`;
+        console.log(`🔧 JSON强制使用处理后版本: ${fileName}`);
+
         const jsonBase64Pattern =
           /"src"\s*:\s*"data:image\/[^;]+;base64,[^"]*"/g;
         processedJSON = processedJSON.replace(
           jsonBase64Pattern,
-          `"src":"${relativePath}"`
+          `"src":"${imagePath}"`
         );
       });
 
@@ -1077,7 +1236,25 @@ function isObjectInRegion(canvas, obj, regionId) {
 async function importImageToSpecificRegion(file, regionId) {
   if (!canvas.value || isLoading.value) return;
 
-  console.log(`📍 导入图片到指定区域: ${regionId}`);
+  console.log(
+    `🖼️ 处理图片: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`
+  );
+
+  // 🔧 根据文件大小和用途决定处理策略
+  const isLargeFile = file.size > 5 * 1024 * 1024; // 5MB以上
+  const maxEditingSize = isLargeFile ? 2048 : 4096; // 大文件用2K，小文件用4K编辑
+
+  const processedImage = await processImageForEditing(
+    file,
+    maxEditingSize,
+    !isLargeFile // 小文件保持原始质量
+  );
+
+  console.log(
+    `📊 处理结果: 压缩比${(processedImage.compressionRatio * 100).toFixed(
+      1
+    )}%, 高质量:${processedImage.isHighQuality}`
+  );
 
   // 🔧 查找指定区域的clipPath
   const selectedClipPath = canvas.value
@@ -1144,10 +1321,8 @@ async function importImageToSpecificRegion(file, regionId) {
     originY: "top",
   });
 
-  const dataUrl = await resizeImage(file, 2048);
-
   return new Promise((resolve) => {
-    fabric.Image.fromURL(dataUrl, (img) => {
+    fabric.Image.fromURL(processedImage.compressed, (img) => {
       img.set({
         left: regionOriginalLeft,
         top: regionOriginalTop,
@@ -1157,12 +1332,28 @@ async function importImageToSpecificRegion(file, regionId) {
         clipPath: clonedClipPath,
         originX: "left",
         originY: "top",
+
+        // 🔧 增强的原始文件信息
         originalFileName: file.name,
         originalFile: file,
-        // 🆕 明确标记所属的UV区域ID
+        originalDimensions: {
+          width: processedImage.original.width,
+          height: processedImage.original.height,
+        },
+        compressionInfo: {
+          ratio: processedImage.compressionRatio,
+          isHighQuality: processedImage.isHighQuality,
+          compressedForEditing: processedImage.compressionRatio < 1.0,
+        },
+
+        // 🔧 新增：传递CMYK处理标记
+        needsCMYKProcessing: processedImage.needsCMYKProcessing || false,
+        colorInfo: processedImage.colorInfo,
+
         uvRegionId: regionId,
       });
 
+      // 缩放逻辑保持不变
       if (img.width && img.height) {
         const scaleX = regionOriginalWidth / img.width;
         const scaleY = regionOriginalHeight / img.height;
@@ -1186,7 +1377,7 @@ async function importImageToSpecificRegion(file, regionId) {
       canvas.value.setActiveObject(img);
       canvas.value.requestRenderAll();
 
-      console.log(`✅ 图片成功导入到区域 ${regionId}`);
+      console.log(`✅ 图片成功导入到区域 ${regionId} (使用压缩版本进行编辑)`);
       resolve();
     });
   });

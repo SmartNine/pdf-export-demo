@@ -55,6 +55,13 @@ class ColorManager {
         .join(", ")
     );
 
+    // 🔧 新增：Ghostscript 警告
+    if (tools.ghostscript) {
+      console.warn(
+        "⚠️ Ghostscript已被禁用以避免CMYK颜色污染。如需启用请确保版本支持正确的CMYK处理。"
+      );
+    }
+
     return tools;
   }
 
@@ -85,12 +92,13 @@ class ColorManager {
     });
   }
 
-  // 🔧 移植：专业图片预处理（从canvas.js）
   async preprocessImage(imageBuffer, options = {}) {
     const {
       maxPixels = 15000,
       processImage = true,
       targetColorSpace = "srgb",
+      quality = 90, // 🔧 新增质量参数
+      preserveForPrint = false, // 🔧 新增印刷模式标志
     } = options;
 
     if (!processImage) return imageBuffer;
@@ -101,85 +109,336 @@ class ColorManager {
         await context.metadata();
 
       console.log(
-        `📷 处理图片: ${width}x${height}, 格式:${format}, 色彩空间:${space}`
+        `🔷 处理图片: ${width}x${height}, 格式:${format}, 色彩空间:${space}`
       );
 
-      // 🔧 移植：CMYK图片特殊处理
+      // 🔧 修复：CMYK图片特殊处理
       if (format === "jpeg" && space === "cmyk") {
         console.log("🎨 检测到CMYK图片，需要专业转换");
-        context = await this.convertCMYKImageProfessionally(
-          context,
+        const convertedBuffer = await this.convertCMYKImageProfessionally(
           imageBuffer
         );
+        context = sharp(convertedBuffer);
       }
 
-      // 🔧 移植：尺寸限制处理
+      // 🔧 印刷模式下的特殊处理
+      if (preserveForPrint) {
+        console.log("🖨️ 印刷模式：保持高质量设置");
+
+        // 更宽松的尺寸限制
+        const printMaxPixels = maxPixels * 10; // 印刷模式允许更大尺寸
+        if (width > printMaxPixels || height > printMaxPixels) {
+          console.log(`📏 印刷模式尺寸调整到${printMaxPixels}px以内`);
+          context = context.resize(printMaxPixels, printMaxPixels, {
+            fit: "inside",
+            kernel: sharp.kernel.lanczos3, // 🔧 使用高质量重采样算法
+          });
+        }
+
+        // 🔧 高质量JPEG设置
+        return await context
+          .jpeg({
+            quality: quality, // 使用传入的高质量参数
+            progressive: false, // 印刷品不需要渐进式
+            mozjpeg: true, // 使用mozjpeg优化器
+            chromaSubsampling: "4:4:4", // 🔧 无色度子采样，保持最高质量
+          })
+          .toBuffer();
+      }
+
+      // 🔧 标准模式的尺寸限制处理
       if (width > maxPixels || height > maxPixels) {
         console.log(`📏 图片尺寸超限，缩放到${maxPixels}px以内`);
         context = context.resize(maxPixels, maxPixels, { fit: "inside" });
       }
 
-      // 🔧 移植：EXIF旋转处理
+      // 🔧 EXIF旋转处理
       if (orientation && orientation !== 1) {
         console.log(`🔄 应用EXIF旋转: ${orientation}`);
         context = this.handleExifOrientation(context, orientation);
       }
 
-      return await context.toBuffer();
+      return await context.jpeg({ quality: quality }).toBuffer();
     } catch (error) {
       console.error("❌ 图片预处理失败:", error);
-      return imageBuffer; // 返回原始数据作为兜底
+      return imageBuffer;
     }
   }
 
-  // 🔧 移植canvas.js的CMYK处理逻辑
-  // 在 colorManager.js 中添加
   async convertCMYKImageProfessionally(imageBuffer) {
-    const { format, space } = await sharp(imageBuffer).metadata();
+    try {
+      const metadata = await sharp(imageBuffer).metadata();
+      console.log("🔍 图片元数据:", {
+        format: metadata.format,
+        space: metadata.space,
+        channels: metadata.channels,
+        width: metadata.width,
+        height: metadata.height,
+      });
 
-    if (format === "jpeg" && space === "cmyk") {
-      console.log("🎨 检测到CMYK图片，使用jpgicc专业转换");
+      if (metadata.format === "jpeg" && metadata.space === "cmyk") {
+        console.log("🎨 检测到CMYK图片，使用标准转换");
+        return await this.convertStandardCMYKImage(imageBuffer, {});
+      }
 
-      const tmpDir = require("os").tmpdir();
-      const inputPath = path.join(tmpDir, `cmyk_input_${Date.now()}.jpg`);
-      const outputPath = path.join(tmpDir, `srgb_output_${Date.now()}.jpg`);
+      return imageBuffer;
+    } catch (error) {
+      console.error("CMYK转换失败:", error);
+      return imageBuffer; // 🔧 返回原始数据作为兜底
+    }
+  }
 
-      try {
-        // 写入临时文件
-        fs.writeFileSync(inputPath, imageBuffer);
+  // 🔧 新增：获取详细色彩信息
+  async getDetailedColorInfo(imageBuffer) {
+    const tmpDir = require("os").tmpdir();
+    const tempPath = path.join(tmpDir, `color_check_${Date.now()}.jpg`);
 
-        // 🔧 使用您现有的ICC文件
-        const cmykProfile = this.checkICCProfile("Japan Color 2001 Coated");
-        const srgbProfile = this.checkICCProfile("sRGB");
+    try {
+      // 写入临时文件用于检测
+      fs.writeFileSync(tempPath, imageBuffer);
 
-        const jpgiccArgs = [
-          "-i",
-          cmykProfile, // 输入：日本印刷标准
-          "-o",
-          srgbProfile, // 输出：sRGB标准
-          inputPath,
-          outputPath,
-        ];
+      return new Promise((resolve) => {
+        exec(`exiftool "${tempPath}"`, (error, stdout, stderr) => {
+          if (error) {
+            resolve({ isYCCK: false, hasICCProfile: false });
+            return;
+          }
 
-        const result = spawnSync("jpgicc", jpgiccArgs);
+          const output = stdout.toLowerCase();
+          const colorInfo = {
+            isYCCK:
+              output.includes("color transform") && output.includes("ycck"),
+            hasICCProfile: output.includes("icc profile name"),
+            iccProfileName: stdout
+              .match(/ICC Profile Name\s*:\s*(.+)/i)?.[1]
+              ?.trim(),
+            colorMode: stdout.match(/Color Mode\s*:\s*(.+)/i)?.[1]?.trim(),
+            colorSpace: stdout.match(/Color Space\s*:\s*(.+)/i)?.[1]?.trim(),
+            colorComponents: stdout
+              .match(/Color Components\s*:\s*(.+)/i)?.[1]
+              ?.trim(),
+          };
 
-        if (result.error) {
-          throw new Error(`jpgicc转换失败: ${result.stderr?.toString()}`);
-        }
-
-        const convertedBuffer = fs.readFileSync(outputPath);
-        console.log("✅ jpgicc CMYK→sRGB转换成功");
-
-        return convertedBuffer;
-      } finally {
-        // 清理临时文件
-        [inputPath, outputPath].forEach((file) => {
-          if (fs.existsSync(file)) fs.unlinkSync(file);
+          console.log("📋 解析的色彩信息:", colorInfo);
+          resolve(colorInfo);
         });
+      });
+    } finally {
+      // 清理临时文件
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
       }
     }
+  }
 
-    return imageBuffer; // 非CMYK图片直接返回
+  // 🔧 新增：专门处理 YCCK 图片
+  async convertYCCKImageProfessionally(imageBuffer, colorInfo) {
+    const tmpDir = require("os").tmpdir();
+    const inputPath = path.join(tmpDir, `ycck_input_${Date.now()}.jpg`);
+    const outputPath = path.join(tmpDir, `srgb_output_${Date.now()}.jpg`);
+
+    try {
+      fs.writeFileSync(inputPath, imageBuffer);
+
+      // 🔧 YCCK 需要特殊的 ImageMagick 处理
+      const convertCmd = [
+        "magick",
+        `"${inputPath}"`,
+        "-colorspace",
+        "CMYK", // 首先明确指定为CMYK
+        "-profile",
+        `"${this.checkICCProfile("Japan Color 2001 Coated")}"`, // 应用原始配置文件
+        "-intent",
+        "Perceptual", // 感知渲染意图
+        "-black-point-compensation", // 黑点补偿
+        "-profile",
+        `"${this.checkICCProfile("sRGB")}"`, // 转换到sRGB
+        "-colorspace",
+        "sRGB", // 确保输出是sRGB
+        "-quality",
+        "98", // 高质量
+        `"${outputPath}"`,
+      ].join(" ");
+
+      console.log("🔧 YCCK转换命令:", convertCmd);
+
+      return new Promise((resolve, reject) => {
+        exec(convertCmd, (error, stdout, stderr) => {
+          if (error) {
+            console.warn("ImageMagick YCCK转换失败，尝试备用方法:", stderr);
+            // 🔧 备用方法：使用 jpgicc
+            this.convertYCCKWithJpgicc(inputPath, outputPath)
+              .then(() => {
+                const convertedBuffer = fs.readFileSync(outputPath);
+                resolve(convertedBuffer);
+              })
+              .catch(reject);
+          } else {
+            console.log("✅ YCCK图片转换成功");
+            const convertedBuffer = fs.readFileSync(outputPath);
+            resolve(convertedBuffer);
+          }
+        });
+      });
+    } finally {
+      // 清理临时文件
+      [inputPath, outputPath].forEach((file) => {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+      });
+    }
+  }
+
+  // 🔧 新增：使用 jpgicc 处理 YCCK
+  async convertYCCKWithJpgicc(inputPath, outputPath) {
+    const jpgiccArgs = [
+      "-q",
+      "100", // 最高质量
+      "-b", // 黑点补偿
+      "-a",
+      "0", // 🔧 相对比色渲染意图（更适合YCCK）
+      "-v", // 详细输出
+      inputPath,
+      outputPath,
+    ];
+
+    return new Promise((resolve, reject) => {
+      const result = spawnSync("jpgicc", jpgiccArgs);
+
+      if (result.error) {
+        reject(new Error(`jpgicc YCCK转换失败: ${result.stderr?.toString()}`));
+      } else {
+        console.log("✅ jpgicc YCCK转换成功");
+        resolve();
+      }
+    });
+  }
+
+  // 🔧 新增：处理标准CMYK图片
+  async convertStandardCMYKImage(imageBuffer, colorInfo) {
+    const tmpDir = require("os").tmpdir();
+    const inputPath = path.join(tmpDir, `cmyk_input_${Date.now()}.jpg`);
+    const outputPath = path.join(tmpDir, `srgb_output_${Date.now()}.jpg`);
+
+    try {
+      fs.writeFileSync(inputPath, imageBuffer);
+      console.log(`📁 输入文件已写入: ${inputPath}`);
+
+      const tools = await this.checkColorTools();
+      const cmykProfile = this.checkICCProfile("Japan Color 2001 Coated");
+      const srgbProfile = this.checkICCProfile("sRGB");
+
+      console.log("🔍 工具检查结果:", {
+        jpgicc: tools.jpgicc,
+        imagemagick: tools.imagemagick?.available,
+        cmykProfile: !!cmykProfile,
+        srgbProfile: !!srgbProfile,
+      });
+
+      // 🔧 基于测试结果：jpgicc 基础转换就很好用（会自动使用嵌入的配置文件）
+      if (tools.jpgicc) {
+        console.log("🎨 使用 jpgicc 基础转换（利用嵌入的ICC配置文件）");
+
+        // 🔧 修复：使用正确的 exec 而不是 spawnSync
+        const jpgiccCmd = `jpgicc -v -q 100 -b -t 1 "${inputPath}" "${outputPath}"`;
+
+        console.log("🔧 jpgicc 命令:", jpgiccCmd);
+
+        const result = await new Promise((resolve) => {
+          exec(jpgiccCmd, (error, stdout, stderr) => {
+            resolve({ error, stdout, stderr });
+          });
+        });
+
+        console.log("📋 jpgicc 执行结果:", {
+          error: result.error?.message,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        });
+
+        if (!result.error && fs.existsSync(outputPath)) {
+          console.log("✅ jpgicc 基础转换成功");
+          const convertedBuffer = fs.readFileSync(outputPath);
+          return convertedBuffer;
+        } else {
+          console.warn("jpgicc 基础转换失败，尝试完整配置文件方式");
+
+          // 🔧 备用方案：使用完整的配置文件参数
+          if (cmykProfile && srgbProfile) {
+            const jpgiccFullCmd = `jpgicc -v -q 100 -b -t 1 -i "${cmykProfile}" -o "${srgbProfile}" "${inputPath}" "${outputPath}"`;
+
+            console.log("🔧 jpgicc 完整命令:", jpgiccFullCmd);
+
+            const fullResult = await new Promise((resolve) => {
+              exec(jpgiccFullCmd, (error, stdout, stderr) => {
+                resolve({ error, stdout, stderr });
+              });
+            });
+
+            if (!fullResult.error && fs.existsSync(outputPath)) {
+              console.log("✅ jpgicc 完整配置文件转换成功");
+              const convertedBuffer = fs.readFileSync(outputPath);
+              return convertedBuffer;
+            }
+          }
+        }
+      }
+
+      // 🔧 备用方案：ImageMagick
+      if (tools.imagemagick?.available && cmykProfile && srgbProfile) {
+        console.log("🎨 使用 ImageMagick 进行 CMYK 转换");
+
+        const magickCmd = `${tools.imagemagick.command} "${inputPath}" -profile "${cmykProfile}" -intent Perceptual -black-point-compensation -profile "${srgbProfile}" -quality 98 "${outputPath}"`;
+
+        console.log("🔧 ImageMagick 命令:", magickCmd);
+
+        const result = await new Promise((resolve) => {
+          exec(magickCmd, (error, stdout, stderr) => {
+            resolve({ error, stdout, stderr });
+          });
+        });
+
+        if (!result.error && fs.existsSync(outputPath)) {
+          console.log("✅ ImageMagick CMYK转换成功");
+          const convertedBuffer = fs.readFileSync(outputPath);
+          return convertedBuffer;
+        } else {
+          console.warn("ImageMagick转换失败:", result.stderr);
+        }
+      }
+
+      // 🔧 最后的备用方案：Sharp 基础转换
+      console.log("🔄 使用 Sharp 进行基础 CMYK 转换");
+
+      try {
+        const convertedBuffer = await sharp(imageBuffer)
+          .toColorspace("srgb")
+          .jpeg({ quality: 98 })
+          .toBuffer();
+
+        console.log("✅ Sharp 基础转换成功");
+        return convertedBuffer;
+      } catch (sharpError) {
+        console.error("Sharp转换也失败:", sharpError);
+        throw new Error(
+          `所有CMYK转换方法都失败了: Sharp: ${sharpError.message}`
+        );
+      }
+    } catch (error) {
+      console.error("CMYK转换过程失败:", error);
+      throw error;
+    } finally {
+      // 🔧 确保清理临时文件
+      [inputPath, outputPath].forEach((file) => {
+        try {
+          if (fs.existsSync(file)) {
+            fs.unlinkSync(file);
+            console.log(`🗑️ 已清理临时文件: ${file}`);
+          }
+        } catch (cleanupError) {
+          console.warn(`清理文件失败: ${file}`, cleanupError.message);
+        }
+      });
+    }
   }
 
   // 🔧 移植canvas.js的jpgicc处理（简化版）
@@ -270,7 +529,6 @@ class ColorManager {
     const tools = await this.checkColorTools();
     const profilePath = this.checkICCProfile(iccProfile);
 
-    // 🔧 调整转换优先级，ImageMagick在有ICC支持的情况下更可靠
     const conversionMethods = [
       () =>
         this.convertWithImageMagick(
@@ -281,7 +539,12 @@ class ColorManager {
           targetDPI
         ), // 🔧 首选：有ICC支持
       () =>
-        this.convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI), // 备选：基础CMYK
+        this.convertWithImageMagickBasic(
+          inputPdf,
+          outputPdf,
+          profilePath,
+          quality
+        ), // 备选：基础CMYK
     ];
 
     for (const convertMethod of conversionMethods) {
