@@ -296,7 +296,7 @@ async function addText() {
       }
     }
 
-    const text = new fabric.Textbox("输入文字", {
+    const text = new fabric.Textbox("Input text", {
       left: 100,
       top: 100,
       fontSize: 32,
@@ -1541,25 +1541,38 @@ async function sendMultiRegionExportRequest(regionExports) {
 }
 // 分页导出
 
-// 修改 generateFontStylesForSVG 函数中的字体路径
+// 🔧 更精确的环境和平台判断
 function generateFontStylesForSVG(fontNames, fontUrlMap) {
-  let fontStyles = "";
-  for (const fontName of fontNames) {
-    const fontUrl = fontUrlMap.get(fontName);
-    if (fontUrl) {
-      const fontFileName = fontUrl.split("/").pop();
-      fontStyles += `
+  const isProduction = import.meta.env.PROD;
+  const backendUrl = import.meta.env.VITE_BACKEND_URL;
+
+  // 判断是否为生产环境的Linux服务器
+  const isProductionLinux = isProduction && backendUrl.includes("duckdns.org");
+
+  if (isProductionLinux) {
+    console.log("🏭 生产环境Linux：使用系统字体");
+    return "";
+  } else {
+    console.log("💻 开发环境或其他：使用网络字体");
+
+    let fontStyles = "";
+    for (const fontName of fontNames) {
+      const fontUrl = fontUrlMap.get(fontName);
+      if (fontUrl) {
+        const fontFileName = fontUrl.split("/").pop();
+        fontStyles += `
         @font-face {
           font-family: '${fontName}';
-          src: url('../fonts/${fontFileName}'); // 🔧 添加 ../ 回到上级目录
+          src: url('../fonts/${fontFileName}');
         }
       `;
+      }
     }
+    if (fontStyles) {
+      return `<defs><style type="text/css">${fontStyles}</style></defs>`;
+    }
+    return "";
   }
-  if (fontStyles) {
-    return `<defs><style type="text/css">${fontStyles}</style></defs>`;
-  }
-  return "";
 }
 
 // 🔧 新增：下载 ZIP 文件的函数
