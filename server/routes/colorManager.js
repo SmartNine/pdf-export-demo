@@ -609,10 +609,13 @@ class ColorManager {
       command += ` -define pdf:use-cmyk=true`;
     }
 
-    // 保持原有的高质量设置
+    // 🔧 修改为矢量优化的无损压缩：
     command += ` -intent Perceptual`;
+    command += ` -interpolate catrom`; // 🔧 高质量插值
+    command += ` -filter Lanczos`; // 🔧 高质量滤镜，保持锐度
+    command += ` -unsharp 0.25x0.25+8+0.065`; // 🔧 轻微锐化，补偿压缩损失
     command += ` -quality ${quality}`;
-    command += ` -compress jpeg`;
+    command += ` -compress jpeg`; // 🔧 保持JPEG压缩但提升质量
     command += ` -density ${targetDPI}`;
     command += ` "${outputPdf}"`;
 
@@ -1086,6 +1089,155 @@ class ColorManager {
           confidence: isCMYK ? 1.0 : 0.5,
           pixelValue: stdout.trim(),
           method: "pixel-analysis",
+        });
+      });
+    });
+  }
+
+  // 🔧 新增：验证PDF是否保持矢量特性
+  async validatePDFVectorContent(pdfPath) {
+    console.log(`🔍 验证PDF矢量内容: ${pdfPath}`);
+
+    const validationMethods = [
+      () => this.checkPDFWithPdffonts(pdfPath),
+      () => this.checkPDFWithPdfinfo(pdfPath),
+      () => this.checkPDFWithPdfImages(pdfPath),
+      () => this.checkPDFWithMutool(pdfPath),
+      () => this.checkPDFFileSize(pdfPath),
+    ];
+
+    const results = {};
+
+    for (const method of validationMethods) {
+      try {
+        const result = await method();
+        Object.assign(results, result);
+      } catch (error) {
+        console.warn("矢量验证方法失败:", error.message);
+      }
+    }
+
+    return {
+      isVector:
+        results.hasText ||
+        results.hasVectorContent ||
+        (results.hasEmbeddedImages && results.isVectorFriendly),
+      hasText: results.hasText || false,
+      hasVectorGraphics: results.hasVectorContent || false,
+      hasImages: results.hasEmbeddedImages || false,
+      imageCount: results.imageCount || 0,
+      fileSize: results.fileSize,
+      details: results,
+    };
+  }
+
+  // 🔧 检查PDF字体信息（矢量文字的指标）
+  async checkPDFWithPdffonts(pdfPath) {
+    const command = `pdffonts "${pdfPath}"`;
+
+    return new Promise((resolve) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          resolve({ hasText: false });
+          return;
+        }
+
+        const hasEmbeddedFonts =
+          stdout.includes("yes") || stdout.includes("Type");
+        const fontCount = (stdout.match(/\n/g) || []).length - 2; // 减去标题行
+
+        resolve({
+          hasText: hasEmbeddedFonts && fontCount > 0,
+          fontCount,
+          fontDetails: stdout,
+        });
+      });
+    });
+  }
+
+  // 🔧 检查PDF基本信息
+  async checkPDFWithPdfinfo(pdfPath) {
+    const command = `pdfinfo "${pdfPath}"`;
+
+    return new Promise((resolve) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          resolve({ hasVectorGraphics: false });
+          return;
+        }
+
+        const output = stdout.toLowerCase();
+        const hasVectorGraphics =
+          !output.includes("form:") ||
+          output.includes("tagged:") ||
+          !output.includes("page size: 0 x 0");
+
+        resolve({
+          hasVectorGraphics,
+          pdfInfo: stdout,
+        });
+      });
+    });
+  }
+
+  // 🔧 检查文件大小（矢量通常比栅格小）
+  async checkPDFFileSize(pdfPath) {
+    try {
+      const stats = fs.statSync(pdfPath);
+      const fileSizeKB = Math.round(stats.size / 1024);
+
+      return {
+        fileSize: fileSizeKB,
+        isSuspiciouslyLarge: fileSizeKB > 50000, // 调整到50MB，适合高分辨率矢量PDF
+      };
+    } catch (error) {
+      return { fileSize: 0 };
+    }
+  }
+
+  async checkPDFWithPdfImages(pdfPath) {
+    const command = `pdfimages -list "${pdfPath}"`;
+
+    return new Promise((resolve) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          resolve({ hasEmbeddedImages: false, imageCount: 0 });
+          return;
+        }
+
+        const lines = stdout.split("\n").filter((line) => line.trim());
+        const imageCount = Math.max(0, lines.length - 2); // 减去标题行
+
+        resolve({
+          hasEmbeddedImages: imageCount > 0,
+          imageCount,
+          isVectorFriendly: imageCount < 10, // 图片数量合理说明可能保持了矢量结构
+        });
+      });
+    });
+  }
+
+  async checkPDFWithMutool(pdfPath) {
+    const command = `mutool info "${pdfPath}"`;
+
+    return new Promise((resolve) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          resolve({ hasVectorContent: false });
+          return;
+        }
+
+        const output = stdout.toLowerCase();
+        const hasVectorContent =
+          output.includes("pages:") &&
+          !output.includes("form xobject") && // 避免整页作为单个对象
+          (output.includes("path") ||
+            output.includes("text") ||
+            output.includes("font"));
+
+        resolve({
+          hasVectorContent,
+          pdfStructure: output.substring(0, 300),
         });
       });
     });

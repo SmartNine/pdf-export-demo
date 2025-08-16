@@ -40,6 +40,28 @@ async function convertToCMYKWithImageMagick(
       console.log("🔍 验证转换后的PDF色彩空间...");
       const validation = await colorManager.validateColorSpace(outputPdf);
 
+      // 🔧 新增：矢量内容验证
+      console.log("📐 验证PDF矢量内容完整性...");
+      const vectorValidation = await colorManager.validatePDFVectorContent(
+        outputPdf
+      );
+
+      if (vectorValidation.isVector) {
+        console.log("✅ PDF保持矢量特性");
+        result.isVector = true;
+        result.hasText = vectorValidation.hasText;
+        result.fileSize = `${vectorValidation.fileSize}KB`;
+
+        if (vectorValidation.details.isSuspiciouslyLarge) {
+          console.warn("⚠️ 文件大小异常，可能部分栅格化");
+          result.sizeWarning = "文件大小较大，建议检查是否完全矢量化";
+        }
+      } else {
+        console.warn("❌ PDF可能已被栅格化");
+        result.isVector = false;
+        result.vectorWarning = "PDF可能被栅格化，建议检查转换参数";
+      }
+
       // 🔧 新增：像素级验证
       console.log("🔬 进行像素级色彩验证...");
       const pixelValidation = await colorManager.validateColorSpaceByPixel(
@@ -372,18 +394,16 @@ async function handleSingleRegionExport(
 
   // SVG -> PDF 转换
   await new Promise((resolve, reject) => {
-    exec(
-      `inkscape "${designSvgPath}" --export-type=pdf --export-filename="${finalPdfPath}" --export-area-drawing`,
-      (error, stdout, stderr) => {
-        if (error) {
-          console.error("Inkscape转换失败:", stderr);
-          reject(new Error("SVG to PDF conversion failed"));
-        } else {
-          console.log("✅ Inkscape PDF转换完成");
-          resolve();
-        }
+    const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
+    exec(inkscapeCmd, (error, stdout, stderr) => {
+      if (error) {
+        console.error("Inkscape转换失败:", stderr);
+        reject(new Error("SVG to PDF conversion failed"));
+      } else {
+        console.log("✅ Inkscape PDF转换完成");
+        resolve();
       }
-    );
+    });
   });
 
   // 🔧 使用专业CMYK转换
@@ -440,6 +460,12 @@ async function handleSingleRegionExport(
     usedCMYK: cmykResult.usedCMYK,
     usedICC: cmykResult.usedICC,
     conversionMethod: cmykResult.method,
+    // 🔧 新增矢量验证信息：
+    isVector: cmykResult.isVector,
+    hasText: cmykResult.hasText,
+    fileSize: cmykResult.fileSize,
+    vectorWarning: cmykResult.vectorWarning,
+    sizeWarning: cmykResult.sizeWarning,
     iccProfile: iccProfileName,
     download: {
       pdf: `/exports/${taskId}/final.pdf`,
@@ -519,7 +545,7 @@ async function handleMultiRegionExport(
     try {
       // SVG -> PDF
       await new Promise((resolve, reject) => {
-        const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI}`;
+        const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
         exec(inkscapeCmd, (error, stdout, stderr) => {
           if (error) {
             console.error(`❌ 区域 ${regionId} Inkscape转换失败:`, stderr);
@@ -530,6 +556,25 @@ async function handleMultiRegionExport(
           }
         });
       });
+
+      // 🔧 新增：验证该区域原始PDF矢量特性
+      console.log(`📐 验证区域 ${regionId} 原始PDF矢量特性...`);
+      const originalVectorValidation =
+        await colorManager.validatePDFVectorContent(regionPdfPath);
+
+      console.log(`🔍 区域 ${regionId} 原始PDF验证结果:`, {
+        isVector: originalVectorValidation.isVector,
+        hasText: originalVectorValidation.hasText,
+        hasVectorGraphics: originalVectorValidation.hasVectorGraphics,
+        fileSize: `${originalVectorValidation.fileSize}KB`,
+        fontCount: originalVectorValidation.details.fontCount,
+      });
+
+      if (!originalVectorValidation.isVector) {
+        console.error(`❌ 区域 ${regionId} Inkscape生成的PDF已被栅格化！`);
+      } else {
+        console.log(`✅ 区域 ${regionId} 原始PDF保持矢量特性`);
+      }
 
       // 🔧 专业CMYK转换
       const cmykResult = await convertToCMYKWithImageMagick(
@@ -581,6 +626,16 @@ async function handleMultiRegionExport(
   const successfulConversions = allConversionResults.filter((r) => r.success);
   const methods = [...new Set(successfulConversions.map((r) => r.method))];
 
+  // 🔧 新增：聚合矢量验证信息
+  const vectorResults = successfulConversions.filter(
+    (r) => r.isVector !== undefined
+  );
+  const allVector =
+    vectorResults.length > 0 && vectorResults.every((r) => r.isVector);
+  const hasVectorWarnings = successfulConversions.some(
+    (r) => r.vectorWarning || r.sizeWarning
+  );
+
   res.json({
     success: true,
     taskId,
@@ -590,6 +645,10 @@ async function handleMultiRegionExport(
     usedCMYK: successfulConversions.length > 0,
     usedICC: successfulConversions.some((r) => r.usedICC),
     conversionMethods: methods,
+    // 🔧 新增矢量验证信息：
+    isVector: allVector,
+    vectorRegions: vectorResults.length,
+    hasVectorWarnings: hasVectorWarnings,
     iccProfile: iccProfileName,
     regions: regionResults,
     // 🔧 仅新增这个字段：

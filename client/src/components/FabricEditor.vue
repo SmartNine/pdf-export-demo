@@ -300,11 +300,14 @@ async function addText() {
       left: 100,
       top: 100,
       fontSize: 32,
-      fontFamily: fontMeta?.name || "Arial", // 使用字体名称
+      fontFamily: fontMeta?.name || "Arial",
       fill: "#000",
-      editable: true, // ✅ 可编辑
-      selectable: true, // ✅ 可选中
-      evented: true, // ✅ 能响应事件（必须）
+      editable: true,
+      selectable: true,
+      evented: true,
+      width: 200,
+      minWidth: 100,
+      splitByGrapheme: false,
     });
 
     canvas.value.add(text);
