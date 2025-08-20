@@ -394,7 +394,18 @@ async function handleSingleRegionExport(
 
   // SVG -> PDF 转换
   await new Promise((resolve, reject) => {
-    const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
+    //const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
+    let inkscapeCmd = `inkscape "${regionSvgPath}"`;
+    inkscapeCmd += ` --export-type=pdf`;
+    inkscapeCmd += ` --export-filename="${regionPdfPath}"`;
+    inkscapeCmd += ` --export-area-drawing`;
+    inkscapeCmd += ` --export-dpi=${detectedDPI}`;
+    inkscapeCmd += ` --export-pdf-version=1.7`;
+    inkscapeCmd += ` --export-text-to-path=false`;
+    inkscapeCmd += ` --export-latex=false`;
+
+    console.log(`📝 svg2pdf的inkscape命令: ${inkscapeCmd}`);
+
     exec(inkscapeCmd, (error, stdout, stderr) => {
       if (error) {
         console.error("Inkscape转换失败:", stderr);
@@ -545,7 +556,18 @@ async function handleMultiRegionExport(
     try {
       // SVG -> PDF
       await new Promise((resolve, reject) => {
-        const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
+        // const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
+        let inkscapeCmd = `inkscape "${regionSvgPath}"`;
+        inkscapeCmd += ` --export-type=pdf`;
+        inkscapeCmd += ` --export-filename="${regionPdfPath}"`;
+        inkscapeCmd += ` --export-area-drawing`;
+        inkscapeCmd += ` --export-dpi=${detectedDPI}`;
+        inkscapeCmd += ` --export-pdf-version=1.7`;
+        inkscapeCmd += ` --export-text-to-path=false`;
+        inkscapeCmd += ` --export-latex=false`;
+
+        console.log(`📝 svg2pdf的inkscape命令: ${inkscapeCmd}`);
+
         exec(inkscapeCmd, (error, stdout, stderr) => {
           if (error) {
             console.error(`❌ 区域 ${regionId} Inkscape转换失败:`, stderr);

@@ -597,26 +597,26 @@ class ColorManager {
       command += ` -define pdf:use-cmyk=true`;
 
       // 🔧 新增：强制写入CMYK元数据
-      command += ` -set colorspace CMYK`;
-      command += ` -define pdf:colorspace=cmyk`;
-      command += ` -define pdf:compression=jpeg`;
+      // command += ` -set colorspace CMYK`;
+      // command += ` -define pdf:colorspace=cmyk`;
+      // command += ` -define pdf:compression=jpeg`;
       command += ` -define pdf:preserve-colorspace=true`;
-      command += ` -type ColorSeparation`; // 强制色彩分离模式
+      // command += ` -type ColorSeparation`; // 强制色彩分离模式
     } else {
       console.warn("⚠️ ICC配置文件不存在，使用基础转换");
       command += ` -colorspace CMYK`;
-      command += ` -set colorspace CMYK`;
+      // command += ` -set colorspace CMYK`;
       command += ` -define pdf:use-cmyk=true`;
     }
 
     // 🔧 修改为矢量优化的无损压缩：
     command += ` -intent Perceptual`;
-    command += ` -interpolate catrom`; // 🔧 高质量插值
-    command += ` -filter Lanczos`; // 🔧 高质量滤镜，保持锐度
-    command += ` -unsharp 0.25x0.25+8+0.065`; // 🔧 轻微锐化，补偿压缩损失
+    // command += ` -interpolate catrom`; // 🔧 高质量插值
+    // command += ` -filter Lanczos`; // 🔧 高质量滤镜，保持锐度
+    // command += ` -unsharp 0.25x0.25+8+0.065`; // 🔧 轻微锐化，补偿压缩损失
     command += ` -quality ${quality}`;
-    command += ` -compress jpeg`; // 🔧 保持JPEG压缩但提升质量
-    command += ` -density ${targetDPI}`;
+    // command += ` -compress jpeg`; // 🔧 保持JPEG压缩但提升质量
+    command += ` -compress LZW`;
     command += ` "${outputPdf}"`;
 
     console.log(`📝 高质量ImageMagick命令: ${command}`);
