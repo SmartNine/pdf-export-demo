@@ -364,131 +364,6 @@ router.post(
   }
 );
 
-// 🔧 简化处理函数，直接在这里实现，不需要EnhancedExporter
-async function handleSingleRegionExport(
-  req,
-  res,
-  taskId,
-  exportDir,
-  iccProfileName
-) {
-  const detectedDPI = parseInt(req.body.detectedDPI) || 72;
-
-  if (!req.files["design"] || req.files["design"].length === 0) {
-    throw new Error("设计文件缺失");
-  }
-
-  const designSvgPath = req.files["design"][0].path;
-  const finalPdfPath = path.join(exportDir, "final.pdf");
-  const cmykPdfPath = path.join(exportDir, "final-cmyk.pdf");
-
-  console.log("📂 开始单区域导出处理...");
-
-  // 🔧 新增：预处理上传的图片
-  if (req.files["images"] && req.files["images"].length > 0) {
-    console.log("🖼️ 预处理上传的图片...");
-    for (const imageFile of req.files["images"]) {
-      await preprocessUploadedImage(imageFile.path, imageFile.originalname);
-    }
-  }
-
-  // SVG -> PDF 转换
-  await new Promise((resolve, reject) => {
-    //const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
-    let inkscapeCmd = `inkscape "${regionSvgPath}"`;
-    inkscapeCmd += ` --export-type=pdf`;
-    inkscapeCmd += ` --export-filename="${regionPdfPath}"`;
-    inkscapeCmd += ` --export-area-drawing`;
-    inkscapeCmd += ` --export-dpi=${detectedDPI}`;
-    inkscapeCmd += ` --export-pdf-version=1.7`;
-    inkscapeCmd += ` --export-text-to-path=false`;
-    inkscapeCmd += ` --export-latex=false`;
-
-    console.log(`📝 svg2pdf的inkscape命令: ${inkscapeCmd}`);
-
-    exec(inkscapeCmd, (error, stdout, stderr) => {
-      if (error) {
-        console.error("Inkscape转换失败:", stderr);
-        reject(new Error("SVG to PDF conversion failed"));
-      } else {
-        console.log("✅ Inkscape PDF转换完成");
-        resolve();
-      }
-    });
-  });
-
-  // 🔧 使用专业CMYK转换
-  const cmykResult = await convertToCMYKWithImageMagick(
-    finalPdfPath,
-    cmykPdfPath,
-    iccProfileName,
-    detectedDPI
-  );
-
-  // 处理其他文件
-  if (req.files["json"] && req.files["json"].length > 0) {
-    const jsonFile = req.files["json"][0];
-    const jsonTarget = path.join(exportDir, "data.json");
-    fs.renameSync(jsonFile.path, jsonTarget);
-  }
-
-  if (req.files["preview"]) {
-    const previewFile = req.files["preview"][0];
-    const previewTarget = path.join(exportDir, "preview.png");
-    fs.renameSync(previewFile.path, previewTarget);
-  }
-
-  // 处理字体文件
-  if (req.body.fontsUsed) {
-    const fontsUsed = JSON.parse(req.body.fontsUsed);
-    const fontsSourceDir = path.join(__dirname, "../public/fonts");
-    const fontsTargetDir = path.join(exportDir, "fonts");
-    fs.mkdirSync(fontsTargetDir, { recursive: true });
-
-    fontsUsed.forEach((fontName) => {
-      const fontFiles = fs
-        .readdirSync(fontsSourceDir)
-        .filter((f) => f.startsWith(fontName));
-      fontFiles.forEach((fontFile) => {
-        const src = path.join(fontsSourceDir, fontFile);
-        const dest = path.join(fontsTargetDir, fontFile);
-        if (fs.existsSync(src)) {
-          fs.copyFileSync(src, dest);
-          console.log(`✅ 拷贝字体: ${fontFile}`);
-        }
-      });
-    });
-  }
-
-  // 创建ZIP
-  const zipPath = path.join(__dirname, "../exports", `${taskId}.zip`);
-  await createZipArchive(exportDir, zipPath);
-
-  // 返回结果
-  res.json({
-    success: true,
-    taskId,
-    usedCMYK: cmykResult.usedCMYK,
-    usedICC: cmykResult.usedICC,
-    conversionMethod: cmykResult.method,
-    // 🔧 新增矢量验证信息：
-    isVector: cmykResult.isVector,
-    hasText: cmykResult.hasText,
-    fileSize: cmykResult.fileSize,
-    vectorWarning: cmykResult.vectorWarning,
-    sizeWarning: cmykResult.sizeWarning,
-    iccProfile: iccProfileName,
-    download: {
-      pdf: `/exports/${taskId}/final.pdf`,
-      cmyk: cmykResult.success ? `/exports/${taskId}/final-cmyk.pdf` : null,
-      preview: `/exports/${taskId}/preview.png`,
-      svg: `/exports/${taskId}/design.svg`,
-      json: `/exports/${taskId}/data.json`,
-      zip: `/exports/${taskId}.zip`,
-    },
-  });
-}
-
 async function handleMultiRegionExport(
   req,
   res,
@@ -556,15 +431,13 @@ async function handleMultiRegionExport(
     try {
       // SVG -> PDF
       await new Promise((resolve, reject) => {
-        // const inkscapeCmd = `inkscape "${regionSvgPath}" --export-type=pdf --export-filename="${regionPdfPath}" --export-area-drawing --export-dpi=${detectedDPI} --export-pdf-version=1.4 --export-text-to-path=false`;
         let inkscapeCmd = `inkscape "${regionSvgPath}"`;
         inkscapeCmd += ` --export-type=pdf`;
         inkscapeCmd += ` --export-filename="${regionPdfPath}"`;
         inkscapeCmd += ` --export-area-drawing`;
         inkscapeCmd += ` --export-dpi=${detectedDPI}`;
-        inkscapeCmd += ` --export-pdf-version=1.7`;
-        inkscapeCmd += ` --export-text-to-path=false`;
-        inkscapeCmd += ` --export-latex=false`;
+        inkscapeCmd += ` --export-pdf-version=1.4`;
+        // inkscapeCmd += ` --export-text-to-path=false`;
 
         console.log(`📝 svg2pdf的inkscape命令: ${inkscapeCmd}`);
 

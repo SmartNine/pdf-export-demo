@@ -45,6 +45,11 @@ echo "🚀 [6/6] 重启后端服务 (使用 ecosystem.config.js)..."
 ssh $REMOTE "
   cd $REMOTE_SERVER_PATH &&
   npm install &&
+  echo '🔧 重新安装Sharp模块...' &&
+  rm -rf node_modules/sharp &&
+  npm install --os=linux --cpu=x64 sharp &&
+  echo '🔧 修复字体文件权限...' &&
+  chmod 644 public/fonts/* &&
   pm2 startOrRestart $REMOTE_ECOSYSTEM_PATH
 "
 
