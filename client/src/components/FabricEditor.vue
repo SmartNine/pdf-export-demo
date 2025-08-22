@@ -591,19 +591,20 @@ async function processImageForEditing(
         console.log(
           `📷 图片尺寸适中(${img.width}x${img.height})，保持原始质量`
         );
-        const originalDataUrl = getOriginalImageDataUrl(file);
 
-        resolve({
-          compressed: originalDataUrl, // 实际上是原始图片
-          original: {
-            file: file,
-            width: img.naturalWidth,
-            height: img.naturalHeight,
-            name: file.name,
-            size: file.size,
-          },
-          compressionRatio: 1.0, // 无压缩
-          isHighQuality: true,
+        getOriginalImageDataUrl(file).then((originalDataUrl) => {
+          resolve({
+            compressed: originalDataUrl, // 实际上是原始图片
+            original: {
+              file: file,
+              width: img.naturalWidth,
+              height: img.naturalHeight,
+              name: file.name,
+              size: file.size,
+            },
+            compressionRatio: 1.0, // 无压缩
+            isHighQuality: true,
+          });
         });
         return;
       }
