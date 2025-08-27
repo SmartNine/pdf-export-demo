@@ -140,6 +140,19 @@ const fontOptions = [
     name: "UNSII",
     url: `${import.meta.env.VITE_BACKEND_URL}/fonts/UNSII.ttf`,
   },
+  // ✅ 跨平台最保险的三种字体
+  {
+    name: "Arial",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/Arial.ttf`,
+  },
+  {
+    name: "Times New Roman",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/TimesNewRoman.ttf`,
+  },
+  {
+    name: "Courier New",
+    url: `${import.meta.env.VITE_BACKEND_URL}/fonts/CourierNew.ttf`,
+  },
 ];
 
 const selectedFont = ref("Roboto Condensed"); // 默认字体

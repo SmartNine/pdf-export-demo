@@ -55,13 +55,6 @@ class ColorManager {
         .join(", ")
     );
 
-    // 🔧 新增：Ghostscript 警告
-    if (tools.ghostscript) {
-      console.warn(
-        "⚠️ Ghostscript已被禁用以避免CMYK颜色污染。如需启用请确保版本支持正确的CMYK处理。"
-      );
-    }
-
     return tools;
   }
 
@@ -531,20 +524,22 @@ class ColorManager {
 
     const conversionMethods = [
       () =>
+        this.convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI), // 🔧 首选：Ghostscript CMYK转换
+      () =>
         this.convertWithImageMagick(
           inputPdf,
           outputPdf,
           profilePath,
           quality,
           targetDPI
-        ), // 🔧 首选：有ICC支持
+        ), // 备选：ImageMagick ICC支持
       () =>
         this.convertWithImageMagickBasic(
           inputPdf,
           outputPdf,
           profilePath,
           quality
-        ), // 备选：基础CMYK
+        ), // 最后备选：基础CMYK
     ];
 
     for (const convertMethod of conversionMethods) {
@@ -699,47 +694,97 @@ class ColorManager {
   }
 
   async convertWithGhostscript(inputPdf, outputPdf, quality, targetDPI = 72) {
+    // 临时调试代码 - 测试基本环境
+    console.log("调试：测试Ghostscript环境...");
+
+    await new Promise((resolve) => {
+      exec("gs --version", (error, stdout, stderr) => {
+        console.log("GS version test:", {
+          error: error?.message,
+          stdout,
+          stderr,
+        });
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      exec("pwd && ls -la", (error, stdout, stderr) => {
+        console.log("Working directory:", {
+          error: error?.message,
+          stdout,
+          stderr,
+        });
+        resolve();
+      });
+    });
+
     // 🔧 针对无ICC支持的Ghostscript简化命令
-    let command = `gs -sDEVICE=pdfwrite -dNOPAUSE -dBATCH -dSAFER`;
+    let command = `gs -dNOPAUSE -dBATCH -dSAFER`;
+    command += ` -sDEVICE=pdfwrite`;
     command += ` -dCompatibilityLevel=1.4`;
 
     // 🔧 只使用基础CMYK设置，不涉及ICC
-    command += ` -dColorConversionStrategy=CMYK`;
-    command += ` -dProcessColorModel=/DeviceCMYK`;
+    command += ` -sProcessColorModel=DeviceCMYK`;
+    command += ` -sColorConversionStrategy=CMYK`;
     command += ` -dConvertCMYKImagesToRGB=false`;
     command += ` -dConvertImagesToIndexed=false`;
 
+    // 字体兼容性设置 - 解决Adobe软件显示方框问题
+    command += ` -dSubsetFonts=false`;
+    command += ` -dEmbedAllFonts=true`;
+
     // 🔧 移除所有ICC相关参数
-    // ❌ command += ` -sDefaultCMYKProfile="${japanProfile}"`;  // 这会失败
-    // ❌ command += ` -sOutputICCProfile="${japanProfile}"`;     // 这会失败
+    // ❌ command += ` -sDefaultCMYKProfile="${japanProfile}"`;
+    // ❌ command += ` -sOutputICCProfile="${japanProfile}"`;
 
     // 基础图像设置
     command += ` -dColorImageResolution=${targetDPI}`;
     command += ` -dGrayImageResolution=${targetDPI}`;
     command += ` -dAutoFilterColorImages=false`;
     command += ` -dColorImageFilter=/DCTEncode`;
-    command += ` -dColorImageDict='<< /Quality ${quality} >>'`;
+    command += ` -dJPEGQ=${quality}`;
 
     command += ` -sOutputFile="${outputPdf}" "${inputPdf}"`;
 
     console.log(`📝 基础Ghostscript命令(无ICC): ${command}`);
 
     return new Promise((resolve, reject) => {
-      exec(command, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`❌ Ghostscript错误: ${error.message}`);
-          console.error(`❌ stderr: ${stderr}`);
-          reject(new Error(`Ghostscript转换失败: ${stderr || error.message}`));
-        } else {
-          console.log(`✅ Ghostscript基础CMYK转换成功`);
-          resolve({
-            success: true,
-            usedCMYK: true,
-            usedICC: false, // 🔧 明确标记未使用ICC
-            method: "Ghostscript Basic CMYK",
-          });
-        }
+      // 调试：打印环境信息
+      console.log("调试环境信息:", {
+        workingDir: path.dirname(inputPdf),
+        command: command,
+        envPath: process.env.PATH,
+        inputExists: require("fs").existsSync(inputPdf),
       });
+      exec(
+        command,
+        {
+          cwd: path.dirname(inputPdf),
+          env: {
+            ...process.env,
+            TMPDIR: "/tmp",
+            PATH: process.env.PATH,
+          },
+        },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.error(`❌ Ghostscript错误: ${error.message}`);
+            console.error(`❌ stderr: ${stderr}`);
+            reject(
+              new Error(`Ghostscript转换失败: ${stderr || error.message}`)
+            );
+          } else {
+            console.log(`✅ Ghostscript基础CMYK转换成功`);
+            resolve({
+              success: true,
+              usedCMYK: true,
+              usedICC: false, // 🔧 明确标记未使用ICC
+              method: "Ghostscript Basic CMYK",
+            });
+          }
+        }
+      );
     });
   }
 
