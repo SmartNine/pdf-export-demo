@@ -470,10 +470,10 @@ async function switchRegion() {
       setTimeout(resolve, 100); // 给渲染一些时间
     });
 
-    console.log("📥 开始加载 outlines.svg");
+    console.log("📥 开始加载 uv_outline.svg");
     await loadSvgToCanvas(
       canvas.value,
-      `/template/${selectedRegion.value}/outlines.svg`,
+      `/template/${selectedRegion.value}/uv_outline.svg`,
       "guides"
     );
 
