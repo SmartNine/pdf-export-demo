@@ -446,7 +446,7 @@ async function switchRegion() {
     await loadSvgToCanvas(
       canvas.value,
       `/template/${selectedRegion.value}/uv_outline.svg`,
-      "uv"
+      "guides"
     );
 
     // 🆕 检测原始SVG的DPI
@@ -468,19 +468,6 @@ async function switchRegion() {
     await new Promise((resolve) => {
       canvas.value.renderAll();
       setTimeout(resolve, 100); // 给渲染一些时间
-    });
-
-    console.log("📥 开始加载 uv_outline.svg");
-    await loadSvgToCanvas(
-      canvas.value,
-      `/template/${selectedRegion.value}/uv_outline.svg`,
-      "guides"
-    );
-
-    // 🔧 等待渲染完成
-    await new Promise((resolve) => {
-      canvas.value.renderAll();
-      setTimeout(resolve, 100);
     });
 
     // 🔧 应用线条可见性设置

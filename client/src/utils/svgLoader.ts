@@ -33,19 +33,31 @@ export async function loadSvgToCanvas(canvas, url, tag) {
             const rawId = obj.id;
             const id = typeof rawId === "string" ? rawId : "" + rawId;
 
-            // 🔧 基础属性设置
+            // 🔧 基础属性设置 - 根据对象类型设置合适的tag
+            let objectTag = tag;
+            // if (
+            //   id.includes("bleed") ||
+            //   id.includes("trim") ||
+            //   id.includes("safe") ||
+            //   id.includes("fold")
+            // ) {
+            //   objectTag = "guides"; // 辅助线对象使用guides标签
+            // }
+
             obj.set({
               selectable: false,
               evented: false,
               exportable: false,
-              tag,
+              tag: objectTag,
               id: id,
               visible: true,
               opacity: obj.opacity || 1,
             });
 
+            console.log(`🔍 处理对象 ${id}，类型判断:`);
             // 🔧 设置线条样式
             if (id.includes("bleed")) {
+              console.log(`✅ 识别为bleed线: ${id}`);
               obj.set({
                 stroke: "red",
                 strokeDashArray: [8, 4],
@@ -54,6 +66,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 excludeFromExport: true,
               });
             } else if (id.includes("safe")) {
+              console.log(`✅ 识别为safe线: ${id}`);
               obj.set({
                 stroke: "green",
                 strokeDashArray: [5, 5],
@@ -62,6 +75,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 excludeFromExport: true,
               });
             } else if (id.includes("trim")) {
+              console.log(`✅ 识别为trim线: ${id}`);
               obj.set({
                 stroke: "gray",
                 customType: "trim",
@@ -69,6 +83,7 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 excludeFromExport: true,
               });
             } else if (id.includes("fold")) {
+              console.log(`✅ 识别为fold线: ${id}`);
               obj.set({
                 stroke: "blue",
                 strokeDashArray: [4, 4],
@@ -76,10 +91,13 @@ export async function loadSvgToCanvas(canvas, url, tag) {
                 fill: "transparent",
                 excludeFromExport: true,
               });
+            } else {
+              console.log(`❓ 未识别的对象类型: ${id}`);
             }
 
             // 🔧 UV区域特殊处理 - 核心修改部分
             if (tag === "uv" && id && id.startsWith("uv_region")) {
+              // if (id && id.startsWith("uv_region")) {
               let pathData = null;
 
               switch (obj.type) {
@@ -150,14 +168,25 @@ export async function loadSvgToCanvas(canvas, url, tag) {
               });
               uvObjects.push(obj);
             } else if (tag === "uv") {
-              // 其他 uv 文件中的非 uv_region 对象，例如辅助线
-              obj.set({
-                stroke: "#888",
-                strokeWidth: 0.5,
-                opacity: 0.2,
-                customType: "uv_guide",
-                excludeFromExport: true,
-              });
+              // 🔧 合并SVG后的智能识别：根据id判断是否为辅助线
+              if (
+                id.includes("bleed") ||
+                id.includes("trim") ||
+                id.includes("safe") ||
+                id.includes("fold")
+              ) {
+                // 辅助线对象已经在上面的条件中处理了，这里不需要额外设置
+                console.log(`✅ 辅助线对象 ${id} 已通过id识别处理`);
+              } else {
+                // 其他未分类的对象
+                obj.set({
+                  stroke: "#888",
+                  strokeWidth: 0.5,
+                  opacity: 0.2,
+                  customType: "uv_guide",
+                  excludeFromExport: true,
+                });
+              }
             }
 
             // 确保路径对象的完整性
