@@ -33,22 +33,11 @@ export async function loadSvgToCanvas(canvas, url, tag) {
             const rawId = obj.id;
             const id = typeof rawId === "string" ? rawId : "" + rawId;
 
-            // 🔧 基础属性设置 - 根据对象类型设置合适的tag
-            let objectTag = tag;
-            // if (
-            //   id.includes("bleed") ||
-            //   id.includes("trim") ||
-            //   id.includes("safe") ||
-            //   id.includes("fold")
-            // ) {
-            //   objectTag = "guides"; // 辅助线对象使用guides标签
-            // }
-
             obj.set({
               selectable: false,
               evented: false,
               exportable: false,
-              tag: objectTag,
+              tag: tag,
               id: id,
               visible: true,
               opacity: obj.opacity || 1,
@@ -97,7 +86,6 @@ export async function loadSvgToCanvas(canvas, url, tag) {
 
             // 🔧 UV区域特殊处理 - 核心修改部分
             if (tag === "uv" && id && id.startsWith("uv_region")) {
-              // if (id && id.startsWith("uv_region")) {
               let pathData = null;
 
               switch (obj.type) {
@@ -202,7 +190,8 @@ export async function loadSvgToCanvas(canvas, url, tag) {
         });
 
         // 🔧 在所有对象处理完成后，为每个UV区域创建独立的clipPath
-        if (Object.keys(uvPathData).length > 0) {
+        // if (Object.keys(uvPathData).length > 0) {
+        if (0) {
           // 🆕 为每个UV区域创建独立的clipPath和边界对象
           Object.entries(uvPathData).forEach(([regionId, paths]) => {
             const mergedPathData = paths.join(" ");
@@ -276,6 +265,108 @@ export async function loadSvgToCanvas(canvas, url, tag) {
 
           console.log(
             `✅ 已创建 ${Object.keys(uvPathData).length} 个UV区域的剪切路径`
+          );
+        }
+
+        // 🔧 在所有对象处理完成后，将所有UV区域合并成一个clipPath
+        if (Object.keys(uvPathData).length > 0) {
+          // 🆕 合并所有UV区域的路径数据
+          const allPaths = [];
+          Object.entries(uvPathData).forEach(([regionId, paths]) => {
+            allPaths.push(...paths);
+          });
+
+          const mergedPathData = allPaths.join(" ");
+
+          console.log(
+            `🔧 创建合并的clipPath，包含 ${
+              Object.keys(uvPathData).length
+            } 个UV区域，路径数据长度: ${mergedPathData.length}`
+          );
+
+          // 🔧 创建合并后的剪切路径（不可见）
+          const uvClipPath = new fabric.Path(mergedPathData, {
+            absolutePositioned: true,
+            visible: true,
+            selectable: false,
+            evented: false,
+            fill: "rgba(248,248,248,1)",
+            stroke: "#888",
+            strokeWidth: 1,
+            opacity: 1,
+            customType: "uv_clipPath",
+            id: "merged_uv_clipPath",
+            uvRegionId: "all_regions",
+          });
+
+          // 🆕 创建合并后的可视化边界（用户可以控制显示/隐藏）
+          const uvVisualBorder = new fabric.Path(mergedPathData, {
+            absolutePositioned: true,
+            visible: true,
+            selectable: false,
+            evented: false,
+            fill: "transparent",
+            stroke: "#888",
+            strokeWidth: 1,
+            strokeDashArray: [5, 5],
+            opacity: 1,
+            customType: "uv_visualBorder",
+            id: "merged_uv_visualBorder",
+            uvRegionId: "all_regions",
+            excludeFromExport: true,
+          });
+
+          // 创建合并后的隐形边界对象（用于导出）
+          const invisibleBoundary = new fabric.Path(mergedPathData, {
+            absolutePositioned: true,
+            visible: false,
+            selectable: false,
+            evented: false,
+            fill: "transparent",
+            stroke: "transparent",
+            strokeWidth: 0,
+            opacity: 0,
+            customType: "uv_boundary",
+            id: "merged_uv_boundary",
+            uvRegionId: "all_regions",
+            excludeFromExport: false,
+          });
+
+          // 🔧 关键新增：创建合并后的原始UV对象（uv_raw）
+          // 这是为了让 importImageToSpecificRegion 能找到对应的 uv_raw 对象
+          const uvRawObject = new fabric.Path(mergedPathData, {
+            absolutePositioned: true,
+            visible: true,
+            selectable: false,
+            evented: false,
+            fill: "#f8f8f8",
+            stroke: "#888",
+            strokeWidth: 1,
+            opacity: 1,
+            customType: "uv_raw", // 🔧 关键：标记为原始 UV 对象
+            id: "merged_uv_raw",
+            uvRegionId: "all_regions", // 🔧 使用相同的区域ID
+            isUvRegion: true,
+          });
+
+          // 🔧 确保所有路径正确设置
+          [uvClipPath, uvVisualBorder, invisibleBoundary, uvRawObject].forEach(
+            (pathObj) => {
+              if (pathObj.path) {
+                pathObj._setPath(pathObj.path);
+              }
+            }
+          );
+
+          processedObjects.push(uvClipPath);
+          processedObjects.push(uvVisualBorder);
+          processedObjects.push(invisibleBoundary);
+          processedObjects.push(uvRawObject); // 🔧 添加原始UV对象
+
+          console.log(
+            `✅ 已创建合并的剪切路径，包含 ${
+              Object.keys(uvPathData).length
+            } 个UV区域`
           );
         }
 

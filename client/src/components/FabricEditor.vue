@@ -446,7 +446,7 @@ async function switchRegion() {
     await loadSvgToCanvas(
       canvas.value,
       `/template/${selectedRegion.value}/uv_outline.svg`,
-      "guides"
+      "uv"
     );
 
     // 🆕 检测原始SVG的DPI
