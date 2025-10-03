@@ -358,10 +358,12 @@ export async function loadSvgToCanvas(canvas, url, tag) {
             }
           );
 
-          processedObjects.push(uvClipPath);
-          processedObjects.push(uvVisualBorder);
-          processedObjects.push(invisibleBoundary);
-          processedObjects.push(uvRawObject); // 🔧 添加原始UV对象
+          // 🔧 将UV对象插入到processedObjects的开头，而不是末尾
+          // 这样它们会先被添加到画布（底层），后续添加的辅助线会在上层
+          processedObjects.unshift(uvRawObject); // 最底层
+          processedObjects.unshift(invisibleBoundary);
+          processedObjects.unshift(uvClipPath);
+          processedObjects.unshift(uvVisualBorder); // 相对靠下但在uvRaw之上
 
           console.log(
             `✅ 已创建合并的剪切路径，包含 ${
